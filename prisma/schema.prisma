@@ -1,5 +1,5 @@
-// Sokoni POS - KRA eTIMS Compliant Point of Sale System
-// Comprehensive database schema for offline-first, two-way compliance
+// Nice & Neat — Barber Shop Management System
+// Schema designed for service-based business with inventory, expenses, cash flow
 
 generator client {
   provider = "prisma-client-js"
@@ -11,587 +11,214 @@ datasource db {
 }
 
 // ============================================
-// CORE BUSINESS ENTITIES
+// SHOP PROFILE
 // ============================================
 
-model Business {
+model Shop {
   id              String   @id @default(cuid())
-  name            String
-  kraPin          String   @unique                    // KRA PIN of the business
-  email           String?
+  name            String   @default("Nice & Neat")
+  tagline         String?  // e.g. "Premium Barber Shop"
   phone           String?
+  email           String?
   address         String?
-  county          String?
-  vatRegistered   Boolean  @default(false)
-  sectorCode      String?                             // KRA business sector code
-  kraUsername     String?                             // eTIMS portal credentials
-  kraPassword     String?                             // Encrypted in production
-  kraBranchId     String?                             // KRA branch assignment
-  currentTier     String   @default("free")           // free | growth | pro
-  invoiceCount    Int      @default(0)                // Track usage for freemium
-  billingCycleStart DateTime @default(now())
-  language        String   @default("en")             // en | sw
+  location        String?  // e.g. "Westlands, Nairobi"
   currency        String   @default("KES")
-  receiptFooter   String?                             // Custom receipt footer text
+  language        String   @default("en")
+  ownerName       String?
+  receiptFooter   String?  @default("Thank you for choosing Nice & Neat!")
+  taxRate         Float    @default(0)   // Service tax % if applicable
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  products      Product[]
-  invoices      Invoice[]
-  customers     Customer[]
-  suppliers     Supplier[]
-  purchases     PurchaseRecord[]
-  mpesaTransactions MpesaTransaction[]
-  syncQueue     SyncQueue[]
-  settings      Settings[]
-  staff         Staff[]
-  branches     Branch[]
-  loyaltyMembers LoyaltyMember[]
-  customerDebts CustomerDebt[]
-  dailyReports  DailyReport[]
+  services    Service[]
+  products    Product[]
+  clients     Client[]
+  barbers     Barber[]
+  sales       Sale[]
+  expenses    Expense[]
+  suppliers   Supplier[]
 }
+
+// ============================================
+// SERVICES (Haircut, Shave, Fade, etc.)
+// ============================================
+
+model Service {
+  id            String   @id @default(cuid())
+  shopId        String
+  name          String                    // e.g. "Classic Haircut", "Skin Fade", "Beard Trim"
+  category      String   @default("Haircut") // Haircut | Shave | Beard | Kids | Style | Other
+  price         Float                     // Standard price
+  duration      Int      @default(30)     // Estimated minutes
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  shop          Shop     @relation(fields: [shopId], references: [id])
+
+  @@index([shopId])
+}
+
+// ============================================
+// RETAIL PRODUCTS (Pomade, Gel, Shampoo, etc.)
+// ============================================
 
 model Product {
   id            String   @id @default(cuid())
-  businessId    String
-  name          String
-  description   String?
-  sku           String?                              // Stock Keeping Unit
-  barcode       String?
-  category      String?
-  unitPrice     Float                                 // Selling price
-  costPrice     Float?                                // Purchase/cost price
-  vatRate       Float    @default(16.0)               // VAT percentage (Kenya standard 16%)
-  vatType       String   @default("VAT")              // VAT | ZERO | EXEMPT | NONTAXABLE
-  itemCode      String?                              // KRA item classification code
-  itemClassCode String?                              // KRA item class code
-  unitOfMeasure String?                              // KRA unit of measure code
-  quantity      Int      @default(0)                  // Current stock quantity
-  reorderLevel  Int      @default(10)                 // Low stock alert threshold
+  shopId        String
+  name          String                    // e.g. "Suavecito Pomade", "Beard Oil"
+  category      String   @default("Styling") // Styling | Grooming | Aftercare | Supply
+  price         Float                     // Selling price
+  costPrice     Float    @default(0)      // Purchase cost
+  quantity      Int      @default(0)      // Stock on hand
+  reorderLevel  Int      @default(5)      // Low stock alert
+  unit          String   @default("pcs")  // pcs | bottle | tube
+  supplierId    String?
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  business      Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  invoiceItems  InvoiceItem[]
+  shop          Shop     @relation(fields: [shopId], references: [id])
 
-  @@index([businessId])
-  @@index([sku])
-  @@index([barcode])
-}
-
-model Customer {
-  id          String   @id @default(cuid())
-  businessId  String
-  name        String
-  kraPin      String?                              // Buyer PIN for B2B invoices - CRITICAL
-  email       String?
-  phone       String?
-  address     String?
-  isVatRegistered Boolean @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  invoices    Invoice[]
-
-  @@index([businessId])
-  @@index([kraPin])
-}
-
-model Supplier {
-  id              String   @id @default(cuid())
-  businessId      String
-  name            String
-  kraPin          String?                              // Supplier KRA PIN
-  email           String?
-  phone           String?
-  address         String?
-  isEtimesCompliant Boolean @default(false)           // Whether supplier has eTIMS
-  bankName        String?
-  bankAccount     String?
-  paybillNumber   String?                             // M-Pesa paybill
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  business        Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  purchases       PurchaseRecord[]
-
-  @@index([businessId])
-  @@index([kraPin])
+  @@index([shopId])
 }
 
 // ============================================
-// INVOICE & TRANSACTION MODELS
+// CLIENTS (Customer history & loyalty)
 // ============================================
 
-model Invoice {
-  id                String   @id @default(cuid())
-  businessId        String
-  invoiceNumber     String   @unique                   // System-generated invoice number
-  kraInvoiceNumber  String?                            // KRA-assigned control number
-  
-  // Buyer details (critical for B2B)
-  customerId        String?                            // Link to customer record
-  buyerPin          String?                            // REQUIRED for B2B - buyer's KRA PIN
-  buyerName         String?
-  buyerAddress      String?
-  
-  // Invoice metadata
-  issueDate         DateTime @default(now())           // Date invoice was issued
-  localTimestamp    DateTime @default(now())           // Offline timestamp when created
-  dueDate           DateTime?
-  
-  // Financial totals
-  subtotal          Float    @default(0)               // Before tax
-  totalVat          Float    @default(0)               // Total VAT amount
-  totalAmount       Float    @default(0)               // Grand total (subtotal + VAT)
-  discountAmount    Float    @default(0)
-  
-  // Payment
-  paymentMethod     String   @default("cash")          // cash | mpesa | bank_transfer | credit
-  mpesaReceiptNumber String?                           // Auto-captured from Daraja callback
-  mpesaPhoneNumber  String?                            // Customer M-Pesa phone
-  
-  // KRA compliance fields
-  status            String   @default("draft")         // draft | queued | syncing | synced | failed | cancelled
-  kraSignature      String?                            // Digital signature from KRA
-  kraControlNumber  String?                            // KRA control unit number
-  kraQrCodeData     String?                            // QR code data from KRA
-  kraInternalData   String?                            // KRA internal data (JSON string)
-  
-  // Error tracking & retry
-  retryCount        Int      @default(0)
-  maxRetries        Int      @default(5)
-  lastError         String?
-  lastSyncAttempt   DateTime?
-  nextRetryAt       DateTime?
-  
-  // Receipt
-  receiptPrinted    Boolean  @default(false)
-  
-  // Type classification
-  invoiceType       String   @default("standard")      // standard | credit_note | debit_note | proforma
-  relatedInvoiceId  String?                            // For credit/debit notes
-  
-  cancelledAt       DateTime?
-  cancelReason      String?
-  
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-
-  business          Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  customer          Customer? @relation(fields: [customerId], references: [id])
-  items             InvoiceItem[]
-  syncQueue         SyncQueue[]
-  mpesaTransactions MpesaTransaction[]
-
-  @@index([businessId])
-  @@index([status])
-  @@index([buyerPin])
-  @@index([kraInvoiceNumber])
-  @@index([createdAt])
-}
-
-model InvoiceItem {
+model Client {
   id            String   @id @default(cuid())
-  invoiceId     String
-  productId     String?
-  
-  // Product details at time of sale (snapshot)
-  itemName      String
-  itemCode      String?                             // KRA item code
-  itemClassCode String?                             // KRA item class code
-  quantity      Float                               // Supports decimal quantities
-  unitPrice     Float                               // Price per unit
-  unitOfMeasure String?                             // KRA unit of measure
-  vatRate       Float    @default(16.0)              // VAT rate for this item
-  vatAmount     Float    @default(0)                  // Calculated VAT amount
-  discountRate  Float    @default(0)
-  discountAmount Float   @default(0)
-  lineTotal     Float                               // quantity * unitPrice - discount + vat
-  
-  createdAt     DateTime @default(now())
-
-  invoice       Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  product       Product?  @relation(fields: [productId], references: [id])
-
-  @@index([invoiceId])
-  @@index([productId])
-}
-
-// ============================================
-// PURCHASE RECORDS (Two-Way Compliance)
-// ============================================
-
-model PurchaseRecord {
-  id                String   @id @default(cuid())
-  businessId        String
-  
-  // Supplier details
-  supplierId        String?
-  supplierName      String
-  supplierPin       String?                            // Supplier KRA PIN
-  supplierInvoiceNumber String?                       // Supplier's own invoice number
-  
-  // Purchase details
-  purchaseDate      DateTime @default(now())
-  description       String
-  category          String?                            // Expense category
-  
-  // Financial
-  subtotal          Float    @default(0)
-  totalVat          Float    @default(0)
-  totalAmount       Float    @default(0)
-  
-  // Payment
-  paymentMethod     String   @default("cash")          // cash | mpesa | bank_transfer | credit
-  mpesaReceiptNumber String?
-  
-  // Compliance
-  isEtimesCompliant Boolean  @default(false)           // Does supplier invoice exist in eTIMS?
-  buyerInitiated    Boolean  @default(false)           // Did we generate this on behalf of supplier?
-  kraReference      String?                            // KRA reference if buyer-initiated
-  
-  // Document tracking
-  attachmentUrl     String?                            // Scanned/uploaded invoice image
-  
-  notes             String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-
-  business          Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  supplier          Supplier? @relation(fields: [supplierId], references: [id])
-
-  @@index([businessId])
-  @@index([supplierPin])
-  @@index([purchaseDate])
-  @@index([isEtimesCompliant])
-}
-
-// ============================================
-// M-PESA TRANSACTIONS
-// ============================================
-
-model MpesaTransaction {
-  id                String   @id @default(cuid())
-  businessId        String
-  invoiceId         String?
-  
-  // M-Pesa details
-  mpesaReceipt      String?                            // M-Pesa receipt number (unique)
-  phoneNumber       String                             // Customer phone
-  amount            Float
-  accountReference  String?                            // Our reference
-  transactionDesc   String?
-  
-  // STK Push tracking
-  checkoutRequestId String?                            // Daraja checkout request ID
-  merchantRequestId String?                            // Daraja merchant request ID
-  
-  // Status
-  status            String   @default("pending")       // pending | processing | completed | failed | timed_out
-  resultCode        String?
-  resultDesc        String?
-  
-  // Callback data
-  callbackRaw       String?                            // Raw callback JSON for debugging
-  
-  // Reconciliation
-  reconciled        Boolean  @default(false)
-  reconciledAt      DateTime?
-  discrepancy       Float?                             // Amount difference if any
-  
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-
-  business          Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  invoice           Invoice?  @relation(fields: [invoiceId], references: [id])
-
-  @@index([businessId])
-  @@index([mpesaReceipt])
-  @@index([status])
-  @@index([invoiceId])
-  @@index([createdAt])
-}
-
-// ============================================
-// OFFLINE SYNC QUEUE
-// ============================================
-
-model SyncQueue {
-  id            String   @id @default(cuid())
-  businessId    String
-  
-  // What to sync
-  entityType    String                             // invoice | purchase | customer | product
-  entityId      String                             // ID of the entity to sync
-  action        String                             // create | update | delete
-  payload       String                             // JSON payload of the data
-  
-  // Sync status
-  status        String   @default("pending")       // pending | in_progress | completed | failed | dead_letter
-  attempts      Int      @default(0)
-  maxAttempts   Int      @default(5)
-  lastAttempt   DateTime?
-  nextAttempt   DateTime?                          // Exponential backoff scheduled time
-  lastError     String?
-  
-  // Priority
-  priority      Int      @default(5)               // 1 (highest) - 10 (lowest)
-  
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  completedAt   DateTime?
-
-  business      Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  invoice       Invoice?  @relation(fields: [entityId], references: [id])
-
-  @@index([businessId, status])
-  @@index([status, nextAttempt])
-  @@index([entityType, entityId])
-  @@index([priority])
-}
-
-// ============================================
-// SETTINGS & CONFIGURATION
-// ============================================
-
-model Settings {
-  id          String   @id @default(cuid())
-  businessId  String
-  
-  // Key-value settings store
-  key         String                              // Setting key (e.g., "mpesa_consumer_key")
-  value       String                              // Setting value (encrypted for secrets)
-  isSecret    Boolean  @default(false)             // Mark for encryption
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-
-  @@unique([businessId, key])
-  @@index([businessId])
-}
-
-// ============================================
-// ANALYTICS SNAPSHOT (Daily rollup)
-// ============================================
-
-model DailySnapshot {
-  id              String   @id @default(cuid())
-  businessId      String
-  date            DateTime
-  
-  // Sales metrics
-  totalSales      Float    @default(0)
-  totalVatCollected Float  @default(0)
-  invoiceCount    Int      @default(0)
-  averageInvoiceValue Float @default(0)
-  
-  // Purchase metrics
-  totalPurchases  Float    @default(0)
-  totalInputVat   Float    @default(0)
-  purchaseCount   Int      @default(0)
-  
-  // M-Pesa metrics
-  mpesaTransactionCount Int @default(0)
-  mpesaTotalAmount Float   @default(0)
-  mpesaReconciliationRate Float @default(0)
-  
-  // Compliance metrics
-  syncedInvoiceCount Int   @default(0)
-  failedInvoiceCount Int   @default(0)
-  queuedInvoiceCount Int   @default(0)
-  compliantSupplierPurchases Int @default(0)
-  nonCompliantSupplierPurchases Int @default(0)
-  
-  createdAt       DateTime @default(now())
-
-  @@unique([businessId, date])
-  @@index([businessId, date])
-}
-
-// ============================================
-// STAFF MANAGEMENT (Enterprise Tier)
-// ============================================
-
-model Staff {
-  id            String   @id @default(cuid())
-  businessId    String
+  shopId        String
   name          String
+  phone         String?
   email         String?
-  phone         String?
-  pin           String                      // 4-digit POS login PIN
-  role          String   @default("cashier") // owner | manager | cashier
-  isActive      Boolean  @default(true)
-  
-  // Permissions
-  canRefund     Boolean  @default(false)
-  canDiscount   Boolean  @default(false)
-  canEditPrice  Boolean  @default(false)
-  canVoid       Boolean  @default(false)
-  canViewReports Boolean @default(false)
-  canManageStock Boolean @default(false)
-  
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  business     Business @relation(fields: [businessId], references: [id])
-  shifts       Shift[]
-
-  @@index([businessId])
-}
-
-model Shift {
-  id            String   @id @default(cuid())
-  businessId    String
-  staffId       String
-  branchId      String?                     // For multi-branch
-  clockIn       DateTime
-  clockOut      DateTime?
-  
-  // Cash drawer tracking
-  openingCash   Float    @default(0)
-  closingCash   Float?
-  expectedCash  Float?                      // Calculated from sales
-  cashVariance  Float?                      // Difference = closing - expected
-  cashPayments  Float    @default(0)         // Cash sales during shift
-  mpesaPayments Float    @default(0)         // M-Pesa sales during shift
-  
-  // Performance
-  invoicesCreated Int     @default(0)
-  totalSales    Float    @default(0)
-  refunds       Float    @default(0)
-  discounts     Float    @default(0)
-  
-  notes         String?
-  createdAt     DateTime @default(now())
-
-  staff         Staff    @relation(fields: [staffId], references: [id])
-
-  @@index([businessId, staffId])
-  @@index([businessId, clockIn])
-}
-
-// ============================================
-// BRANCH MANAGEMENT (Enterprise Tier)
-// ============================================
-
-model Branch {
-  id            String   @id @default(cuid())
-  businessId    String
-  name          String
-  location      String?
-  county        String?
-  phone         String?
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  business     Business @relation(fields: [businessId], references: [id])
-
-  @@index([businessId])
-}
-
-// ============================================
-// LOYALTY PROGRAM (Growth & Pro Tier)
-// ============================================
-
-model LoyaltyMember {
-  id            String   @id @default(cuid())
-  businessId    String
-  customerId    String?                     // Link to customer if exists
-  name          String
-  phone         String                      // Primary identifier (like Bonga Points)
-  points        Int      @default(0)
+  notes         String?                   // Preferences: "Likes skin fade, no clippers on sides"
+  loyaltyPoints Int      @default(0)      // 1 point per visit
+  totalVisits   Int      @default(0)
   totalSpent    Float    @default(0)
-  tier          String   @default("bronze")  // bronze | silver | gold
-  isActive      Boolean  @default(true)
-  joinedAt      DateTime @default(now())
   lastVisitAt   DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  business     Business @relation(fields: [businessId], references: [id])
+  shop          Shop     @relation(fields: [shopId], references: [id])
+  sales         Sale[]
 
-  @@index([businessId, phone])
-  @@index([businessId])
+  @@index([shopId])
+  @@index([shopId, phone])
 }
 
 // ============================================
-// CUSTOMER DEBT LEDGER (Critical for Kenya)
-// Shopkeepers sell on credit — must track who owes what
+// BARBERS (Staff with commission tracking)
 // ============================================
 
-model CustomerDebt {
+model Barber {
+  id              String   @id @default(cuid())
+  shopId          String
+  name            String
+  phone           String?
+  role            String   @default("barber") // owner | barber | apprentice
+  commissionType  String   @default("percentage") // percentage | flat | booth_rental
+  commissionValue Float    @default(60)  // 60 = 60% of service revenue, or flat KES amount
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  shop            Shop     @relation(fields: [shopId], references: [id])
+  sales           Sale[]
+
+  @@index([shopId])
+}
+
+// ============================================
+// SALES (Transactions — services + retail)
+// ============================================
+
+model Sale {
   id            String   @id @default(cuid())
-  businessId    String
-  customerId    String?                     // Optional link to customer
-  customerName  String
-  customerPhone String?
-  description   String                      // What was bought on credit
-  originalAmount Float                      // Amount owed
-  paidAmount    Float    @default(0)         // Amount paid back
-  balance       Float                        // Remaining = original - paid
-  dueDate       DateTime?                   // When they promised to pay
-  status        String   @default("outstanding") // outstanding | partial | settled | overdue
+  shopId        String
+  clientId      String?
+  barberId      String?
+  invoiceNumber String                    // e.g. NN-20250105-001
+  subtotal      Float                     // Before tax
+  taxAmount     Float    @default(0)
+  discountAmount Float   @default(0)
+  totalAmount   Float                     // Final amount paid
+  paymentMethod String   @default("cash") // cash | mpesa | card
+  mpesaRef      String?                   // M-Pesa transaction code
+  status        String   @default("completed") // completed | refunded
+  notes         String?
+  saleDate      DateTime @default(now())  // When the sale happened
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  shop          Shop     @relation(fields: [shopId], references: [id])
+  client        Client?  @relation(fields: [clientId], references: [id])
+  barber        Barber?  @relation(fields: [barberId], references: [id])
+  items         SaleItem[]
+
+  @@index([shopId, saleDate])
+  @@index([shopId, paymentMethod])
+  @@index([shopId, status])
+}
+
+model SaleItem {
+  id            String   @id @default(cuid())
+  saleId        String
+  itemType      String                     // service | product
+  itemId        String                     // Service ID or Product ID
+  itemName      String                     // Snapshot of name at time of sale
+  price         Float                      // Unit price
+  quantity      Int      @default(1)
+  lineTotal     Float                      // price * quantity
+  createdAt     DateTime @default(now())
+
+  sale          Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+}
+
+// ============================================
+// EXPENSES (Rent, Utilities, Supplies, Salaries, etc.)
+// ============================================
+
+model Expense {
+  id            String   @id @default(cuid())
+  shopId        String
+  category      String                     // rent | utilities | supplies | salaries | inventory | maintenance | marketing | misc
+  description   String                     // e.g. "Monthly rent - January", "Electricity bill", "Clipper blades x10"
+  amount        Float
+  paymentMethod String   @default("cash")  // cash | mpesa | bank
+  vendor        String?                    // Who was paid
+  expenseDate   DateTime                   // When the expense was incurred
+  isRecurring   Boolean  @default(false)   // Monthly recurring expense
+  recurringType String?                    // monthly | weekly | daily
   notes         String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  business     Business @relation(fields: [businessId], references: [id])
+  shop          Shop     @relation(fields: [shopId], references: [id])
 
-  @@index([businessId, status])
-  @@index([businessId, customerPhone])
+  @@index([shopId, expenseDate])
+  @@index([shopId, category])
 }
 
 // ============================================
-// DAILY REPORT / Z-REPORT
-// End-of-day cash-up summary
+// SUPPLIERS (For inventory restocking)
 // ============================================
 
-model DailyReport {
+model Supplier {
   id            String   @id @default(cuid())
-  businessId    String
-  branchId      String?
-  date          DateTime                    // The date this report covers
-  staffId       String?                     // Who closed the day
-
-  // Sales summary
-  totalSales    Float    @default(0)
-  totalVat      Float    @default(0)
-  invoiceCount  Int      @default(0)
-  cashSales     Float    @default(0)
-  mpesaSales    Float    @default(0)
-  bankSales     Float    @default(0)
-  creditSales   Float    @default(0)
-  refunds       Float    @default(0)
-  discounts     Float    @default(0)
-
-  // Cash drawer
-  openingCash   Float    @default(0)
-  closingCash   Float    @default(0)
-  cashVariance  Float    @default(0)
-
-  // Expenses paid out
-  expensesPaid  Float    @default(0)
-
-  // Debt tracking
-  newDebts      Float    @default(0)        // New credit extended
-  debtsCollected Float   @default(0)        // Old debts collected
-
-  // Profit estimate
-  costOfGoods   Float    @default(0)
-  grossProfit   Float    @default(0)
-
+  shopId        String
+  name          String
+  phone         String?
+  email         String?
+  address       String?
   notes         String?
-  isClosed      Boolean  @default(false)     // Day closed?
   createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  business     Business @relation(fields: [businessId], references: [id])
+  shop          Shop     @relation(fields: [shopId], references: [id])
 
-  @@unique([businessId, date])
-  @@index([businessId])
+  @@index([shopId])
 }

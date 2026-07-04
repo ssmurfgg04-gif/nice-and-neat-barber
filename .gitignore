@@ -58,4 +58,4 @@ tool-results/
 research*.json
 pos_research*.json
 db/
-MARKET_RESEARCH_ANALYSIS.md
+MARKET_RESEARCH_ANALYSIS.md*.json

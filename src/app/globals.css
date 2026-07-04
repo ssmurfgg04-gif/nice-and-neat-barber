@@ -3,7 +3,7 @@
 @custom-variant dark (&:is(.dark *));
 
 /* ============================================
-   SOKONI POS — ENTERPRISE PREMIUM DESIGN SYSTEM
+   NICE & NEAT — BARBER SHOP PREMIUM DESIGN SYSTEM
    ============================================ */
 
 :root {
@@ -13,33 +13,33 @@
   --card-foreground: #0a0f1a;
   --popover: #ffffff;
   --popover-foreground: #0a0f1a;
-  --primary: #059669;
+  --primary: #d97706;
   --primary-foreground: #ffffff;
-  --primary-light: #d1fae5;
+  --primary-light: #fef3c7;
   --secondary: #f1f5f9;
   --secondary-foreground: #0a0f1a;
   --muted: #f1f5f9;
   --muted-foreground: #64748b;
-  --accent: #f0fdf4;
-  --accent-foreground: #059669;
+  --accent: #fffbeb;
+  --accent-foreground: #d97706;
   --destructive: #ef4444;
   --destructive-foreground: #ffffff;
   --border: #e2e8f0;
   --input: #e2e8f0;
-  --ring: #059669;
+  --ring: #d97706;
   --radius: 0.75rem;
   --success: #22c55e;
   --warning: #f59e0b;
   --info: #3b82f6;
   --sidebar-bg: #f8fafc;
-  --sidebar-active: #059669;
+  --sidebar-active: #d97706;
   --glass: rgba(255, 255, 255, 0.7);
   --glass-border: rgba(255, 255, 255, 0.3);
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.03);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.06), 0 4px 6px -4px rgba(0, 0, 0, 0.03);
   --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.03);
-  --shadow-glow: 0 0 20px rgba(5, 150, 105, 0.15);
+  --shadow-glow: 0 0 20px rgba(217, 119, 6, 0.15);
 }
 
 .dark {
@@ -49,32 +49,32 @@
   --card-foreground: #f1f5f9;
   --popover: #0f1420;
   --popover-foreground: #f1f5f9;
-  --primary: #34d399;
+  --primary: #fbbf24;
   --primary-foreground: #06080f;
-  --primary-light: #064e3b;
+  --primary-light: #78350f;
   --secondary: #1e293b;
   --secondary-foreground: #f1f5f9;
   --muted: #151c2c;
   --muted-foreground: #7c8db5;
-  --accent: #064e3b;
-  --accent-foreground: #34d399;
+  --accent: #78350f;
+  --accent-foreground: #fbbf24;
   --destructive: #f87171;
   --destructive-foreground: #06080f;
   --border: #1e293b;
   --input: #1e293b;
-  --ring: #34d399;
+  --ring: #fbbf24;
   --success: #4ade80;
   --warning: #fbbf24;
   --info: #60a5fa;
   --sidebar-bg: #0a0e1a;
-  --sidebar-active: #34d399;
+  --sidebar-active: #fbbf24;
   --glass: rgba(15, 20, 32, 0.7);
   --glass-border: rgba(30, 41, 59, 0.5);
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.2);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
   --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
-  --shadow-glow: 0 0 25px rgba(52, 211, 153, 0.2);
+  --shadow-glow: 0 0 25px rgba(251, 191, 36, 0.2);
 }
 
 * {
@@ -214,15 +214,17 @@ body {
    SIDEBAR — PREMIUM
    ============================================ */
 .nav-item-active {
-  background: linear-gradient(135deg, var(--primary), #0d9488);
+  background: linear-gradient(135deg, #d97706, #ea580c);
   color: var(--primary-foreground);
   font-weight: 600;
   border-radius: 0.625rem;
-  box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
+  box-shadow: 0 2px 8px rgba(217, 119, 6, 0.3);
 }
 
 .dark .nav-item-active {
-  box-shadow: 0 2px 8px rgba(52, 211, 153, 0.25);
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  color: #06080f;
+  box-shadow: 0 2px 8px rgba(251, 191, 36, 0.25);
 }
 
 /* ============================================
@@ -302,14 +304,14 @@ body {
    GRADIENT TEXT
    ============================================ */
 .gradient-text {
-  background: linear-gradient(135deg, #059669, #0d9488);
+  background: linear-gradient(135deg, #d97706, #ea580c);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
 .dark .gradient-text {
-  background: linear-gradient(135deg, #34d399, #2dd4bf);
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -340,32 +342,32 @@ body {
    PREMIUM BUTTON STYLES
    ============================================ */
 .btn-primary {
-  background: linear-gradient(135deg, #059669, #0d9488);
+  background: linear-gradient(135deg, #d97706, #ea580c);
   color: white;
   font-weight: 600;
   border-radius: 0.75rem;
   transition: all 0.2s;
-  box-shadow: 0 4px 14px rgba(5, 150, 105, 0.3);
+  box-shadow: 0 4px 14px rgba(217, 119, 6, 0.3);
 }
 
 .btn-primary:hover {
-  box-shadow: 0 6px 20px rgba(5, 150, 105, 0.4);
+  box-shadow: 0 6px 20px rgba(217, 119, 6, 0.4);
   transform: translateY(-1px);
 }
 
 .btn-primary:active {
   transform: translateY(0);
-  box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
+  box-shadow: 0 2px 8px rgba(217, 119, 6, 0.3);
 }
 
 .dark .btn-primary {
-  background: linear-gradient(135deg, #34d399, #2dd4bf);
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
   color: #06080f;
-  box-shadow: 0 4px 14px rgba(52, 211, 153, 0.25);
+  box-shadow: 0 4px 14px rgba(251, 191, 36, 0.25);
 }
 
 .dark .btn-primary:hover {
-  box-shadow: 0 6px 20px rgba(52, 211, 153, 0.35);
+  box-shadow: 0 6px 20px rgba(251, 191, 36, 0.35);
 }
 
 /* ============================================

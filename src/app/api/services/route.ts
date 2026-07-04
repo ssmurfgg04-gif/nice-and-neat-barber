@@ -5,17 +5,17 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const shopId = searchParams.get('shopId');
   if (!shopId) return NextResponse.json({ error: 'shopId required' }, { status: 400 });
-  const products = await db.product.findMany({ where: { shopId, isActive: true }, orderBy: { name: 'asc' } });
-  return NextResponse.json(products);
+  const services = await db.service.findMany({ where: { shopId, isActive: true }, orderBy: { category: 'asc' } });
+  return NextResponse.json(services);
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { shopId, name, category, price, costPrice, quantity, reorderLevel, unit } = body;
+    const { shopId, name, category, price, duration } = body;
     if (!shopId || !name || !price) return NextResponse.json({ error: 'shopId, name, price required' }, { status: 400 });
-    const product = await db.product.create({ data: { shopId, name, category: category || 'Styling', price: parseFloat(price), costPrice: parseFloat(costPrice) || 0, quantity: parseInt(quantity) || 0, reorderLevel: parseInt(reorderLevel) || 5, unit: unit || 'pcs' } });
-    return NextResponse.json(product, { status: 201 });
+    const service = await db.service.create({ data: { shopId, name, category: category || 'Haircut', price: parseFloat(price), duration: parseInt(duration) || 30 } });
+    return NextResponse.json(service, { status: 201 });
   } catch (error: any) { return NextResponse.json({ error: error.message }, { status: 500 }); }
 }
 
@@ -25,10 +25,9 @@ export async function PUT(request: NextRequest) {
     const { id, ...updates } = body;
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
     if (updates.price) updates.price = parseFloat(updates.price);
-    if (updates.costPrice) updates.costPrice = parseFloat(updates.costPrice);
-    if (updates.quantity) updates.quantity = parseInt(updates.quantity);
-    const product = await db.product.update({ where: { id }, data: updates });
-    return NextResponse.json(product);
+    if (updates.duration) updates.duration = parseInt(updates.duration);
+    const service = await db.service.update({ where: { id }, data: updates });
+    return NextResponse.json(service);
   } catch (error: any) { return NextResponse.json({ error: error.message }, { status: 500 }); }
 }
 
@@ -37,7 +36,7 @@ export async function DELETE(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
-    await db.product.update({ where: { id }, data: { isActive: false } });
+    await db.service.update({ where: { id }, data: { isActive: false } });
     return NextResponse.json({ success: true });
   } catch (error: any) { return NextResponse.json({ error: error.message }, { status: 500 }); }
 }

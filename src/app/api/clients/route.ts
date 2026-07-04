@@ -4,18 +4,28 @@ import { NextRequest, NextResponse } from 'next/server';
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const shopId = searchParams.get('shopId');
+  const search = searchParams.get('search');
   if (!shopId) return NextResponse.json({ error: 'shopId required' }, { status: 400 });
-  const products = await db.product.findMany({ where: { shopId, isActive: true }, orderBy: { name: 'asc' } });
-  return NextResponse.json(products);
+
+  const where: any = { shopId };
+  if (search) {
+    where.OR = [{ name: { contains: search } }, { phone: { contains: search } }, { email: { contains: search } }, { notes: { contains: search } }];
+  }
+
+  const clients = await db.client.findMany({
+    where, orderBy: { totalVisits: 'desc' },
+    include: { sales: { orderBy: { saleDate: 'desc' }, take: 10, include: { items: true, barber: true } } },
+  });
+  return NextResponse.json(clients);
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { shopId, name, category, price, costPrice, quantity, reorderLevel, unit } = body;
-    if (!shopId || !name || !price) return NextResponse.json({ error: 'shopId, name, price required' }, { status: 400 });
-    const product = await db.product.create({ data: { shopId, name, category: category || 'Styling', price: parseFloat(price), costPrice: parseFloat(costPrice) || 0, quantity: parseInt(quantity) || 0, reorderLevel: parseInt(reorderLevel) || 5, unit: unit || 'pcs' } });
-    return NextResponse.json(product, { status: 201 });
+    const { shopId, name, phone, email, notes } = body;
+    if (!shopId || !name) return NextResponse.json({ error: 'shopId and name required' }, { status: 400 });
+    const client = await db.client.create({ data: { shopId, name, phone: phone || null, email: email || null, notes: notes || null } });
+    return NextResponse.json(client, { status: 201 });
   } catch (error: any) { return NextResponse.json({ error: error.message }, { status: 500 }); }
 }
 
@@ -24,11 +34,8 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     const { id, ...updates } = body;
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
-    if (updates.price) updates.price = parseFloat(updates.price);
-    if (updates.costPrice) updates.costPrice = parseFloat(updates.costPrice);
-    if (updates.quantity) updates.quantity = parseInt(updates.quantity);
-    const product = await db.product.update({ where: { id }, data: updates });
-    return NextResponse.json(product);
+    const client = await db.client.update({ where: { id }, data: updates });
+    return NextResponse.json(client);
   } catch (error: any) { return NextResponse.json({ error: error.message }, { status: 500 }); }
 }
 
@@ -37,7 +44,7 @@ export async function DELETE(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
-    await db.product.update({ where: { id }, data: { isActive: false } });
+    await db.client.delete({ where: { id } });
     return NextResponse.json({ success: true });
   } catch (error: any) { return NextResponse.json({ error: error.message }, { status: 500 }); }
 }

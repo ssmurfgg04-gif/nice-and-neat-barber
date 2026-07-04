@@ -2,14 +2,14 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Sokoni - KRA eTIMS Compliant POS",
-  description: "Kenya's smartest point-of-sale system. KRA eTIMS compliant, M-Pesa native, offline-first POS for Kenyan businesses.",
+  title: "Nice & Neat — Barber Shop Management",
+  description: "Premium barber shop management system. Track sales, expenses, inventory, clients, and barbers with daily, weekly, and monthly reports.",
   manifest: "/manifest.json",
-  applicationName: "Sokoni POS",
+  applicationName: "Nice & Neat",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Sokoni POS",
+    title: "Nice & Neat",
   },
 };
 
@@ -18,7 +18,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: "#059669",
+  themeColor: "#d97706",
 };
 
 export default function RootLayout({
