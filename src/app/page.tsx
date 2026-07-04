@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   LayoutDashboard, Scissors, Users, CreditCard, Settings, Package,
   Plus, Search, RefreshCw, CheckCircle, AlertTriangle, XCircle, Clock,
@@ -10,6 +10,7 @@ import {
   BarChart3, PieChart, Activity, Store, Award, Bell, FileText, Receipt
 } from 'lucide-react';
 import { formatCurrency } from '@/lib/i18n';
+import { loadData, saveData, createSale, createExpense, deleteExpense, createClient, createService, createProduct, updateProduct, createBarber, addToQueue, updateQueueEntry, getDashboardData, getPnLData, getQueueData, exportData, importData, resetData, type AppData } from '@/lib/store';
 
 // ============================================
 // TYPES
@@ -70,21 +71,21 @@ function StatusBadge({ status }: { status: string }) {
 // ============================================
 export default function NiceAndNeat() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
-  const [shopId, setShopId] = useState<string>('');
   const [isDark, setIsDark] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isSeeded, setIsSeeded] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
-  const [loadingError, setLoadingError] = useState<string | null>(null);
 
-  // Data
-  const [dashboard, setDashboard] = useState<DashboardData | null>(null);
-  const [services, setServices] = useState<Service[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [clients, setClients] = useState<Client[]>([]);
-  const [barbers, setBarbers] = useState<Barber[]>([]);
-  const [recentSales, setRecentSales] = useState<Sale[]>([]);
-  const [expenses, setExpenses] = useState<Expense[]>([]);
+  // Data — single source of truth from the localStorage-backed store
+  const [data, setData] = useState<AppData | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const refresh = () => { setData(loadData()); setRefreshKey(k => k + 1); };
+
+  // Load data on client mount (avoids SSR localStorage issues)
+  useEffect(() => { setData(loadData()); }, []);
+
+  // Shop form (settings) — kept local until saved
+  const [shopForm, setShopForm] = useState<any>({ name: 'Nice & Neat', tagline: '', phone: '', email: '', address: '', location: '', ownerName: '', receiptFooter: '', currency: 'KES' });
+  useEffect(() => { if (data) setShopForm(data.shop); }, [data]);
 
   // New Sale state
   const [cart, setCart] = useState<{ itemType: 'service' | 'product'; itemId: string; itemName: string; price: number; quantity: number }[]>([]);
@@ -100,7 +101,6 @@ export default function NiceAndNeat() {
   const [showClientSelect, setShowClientSelect] = useState(false);
 
   // Queue state
-  const [queueData, setQueueData] = useState<any>(null);
   const [newQueueEntry, setNewQueueEntry] = useState({ clientName: '', clientPhone: '', partySize: '1', preferredBarberId: '', notes: '' });
   const [showAddQueue, setShowAddQueue] = useState(false);
 
@@ -110,14 +110,12 @@ export default function NiceAndNeat() {
 
   // Reports state
   const [reportPeriod, setReportPeriod] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('monthly');
-  const [reportData, setReportData] = useState<any>(null);
-  const [pnlData, setPnlData] = useState<any>(null);
   const [reportFrom, setReportFrom] = useState('');
   const [reportTo, setReportTo] = useState('');
   const [reportTab, setReportTab] = useState<'pnl' | 'trend' | 'breakdown' | 'transactions'>('pnl');
 
-  // Sales/Expense search
-  const [salesSearch, setSalesSearch] = useState('');
+  // Clients list search
+  const [clientListSearch, setClientListSearch] = useState('');
 
   // New item modals
   const [showNewService, setShowNewService] = useState(false);
@@ -134,101 +132,54 @@ export default function NiceAndNeat() {
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 4000); return () => clearTimeout(t); } }, [toast]);
   const showToast = (message: string, type: 'success' | 'error' | 'warning' = 'success') => setToast({ message, type });
 
-  // Seed
-  const seedDatabase = useCallback(async () => {
-    try {
-      const res = await fetch('/api/seed', { method: 'POST' });
-      const data = await res.json();
-      if (data.shopId) { setShopId(data.shopId); setIsSeeded(true); showToast('Welcome to Nice & Neat! Demo data loaded.', 'success'); }
-    } catch { showToast('Failed to initialize database', 'error'); }
-  }, []);
-  useEffect(() => { if (!isSeeded) seedDatabase(); }, [isSeeded, seedDatabase]);
+  // === DERIVED DATA (from store, recomputed on every render) ===
+  const services = data?.services ?? [];
+  const products = data?.products ?? [];
+  const clients = data?.clients ?? [];
+  const barbers = data?.barbers ?? [];
+  const expenses = data?.expenses ?? [];
+  const recentSales = data?.sales?.slice(0, 20) ?? [];
+  const dashboard: DashboardData = data ? (getDashboardData() as any) : null;
+  const queueData = data ? getQueueData() : null;
+  const pnlData = data ? getPnLData(reportPeriod, reportFrom, reportTo) : null;
 
-  // === FETCHERS ===
-  const fetchDashboard = useCallback(async () => {
-    if (!shopId) return;
-    try {
-      const r = await fetch(`/api/dashboard?shopId=${shopId}`);
-      if (!r.ok) throw new Error('Dashboard fetch failed');
-      const d = await r.json();
-      setDashboard(d);
-      setLoadingError(null);
-    } catch (e: any) { setLoadingError(e.message); }
-  }, [shopId]);
+  // === DERIVED: report data (built from pnlData) ===
+  const reportData = pnlData ? {
+    serviceBreakdown: (() => {
+      const m = new Map<string, { name: string; count: number; revenue: number }>();
+      pnlData.sales.forEach((sale: any) => {
+        sale.items.forEach((item: any) => {
+          if (item.itemType === 'service') {
+            const ex = m.get(item.itemName) || { name: item.itemName, count: 0, revenue: 0 };
+            ex.count += item.quantity;
+            ex.revenue += item.lineTotal;
+            m.set(item.itemName, ex);
+          }
+        });
+      });
+      return Array.from(m.values()).sort((a, b) => b.revenue - a.revenue);
+    })(),
+    expenseBreakdown: (() => {
+      const cats = ['rent', 'utilities', 'supplies', 'salaries', 'inventory', 'maintenance', 'marketing', 'misc'];
+      return cats.map(cat => ({
+        category: cat,
+        amount: pnlData.expenses.filter((e: any) => e.category === cat).reduce((s: number, e: any) => s + e.amount, 0),
+      })).filter(e => e.amount > 0).sort((a, b) => b.amount - a.amount);
+    })(),
+    barberBreakdown: pnlData.current.commissions.byBarber.map((b: any) => ({ name: b.name, sales: b.sales, revenue: b.revenue, commission: b.commission })),
+  } : null;
 
-  const fetchServices = useCallback(async () => {
-    if (!shopId) return;
-    try { const r = await fetch(`/api/services?shopId=${shopId}`); if (r.ok) setServices(await r.json()); } catch {}
-  }, [shopId]);
-
-  const fetchProducts = useCallback(async () => {
-    if (!shopId) return;
-    try { const r = await fetch(`/api/products?shopId=${shopId}`); if (r.ok) setProducts(await r.json()); } catch {}
-  }, [shopId]);
-
-  const fetchClients = useCallback(async (search?: string) => {
-    if (!shopId) return;
-    try { const r = await fetch(`/api/clients?shopId=${shopId}${search ? `&search=${search}` : ''}`); if (r.ok) setClients(await r.json()); } catch {}
-  }, [shopId]);
-
-  const fetchBarbers = useCallback(async () => {
-    if (!shopId) return;
-    try { const r = await fetch(`/api/barbers?shopId=${shopId}`); if (r.ok) setBarbers(await r.json()); } catch {}
-  }, [shopId]);
-
-  const fetchExpenses = useCallback(async () => {
-    if (!shopId) return;
-    try {
-      const params = new URLSearchParams({ shopId, ...expenseFilter });
-      const r = await fetch(`/api/expenses?${params}`);
-      if (r.ok) setExpenses(await r.json());
-    } catch {}
-  }, [shopId, expenseFilter]);
-
-  const fetchRecentSales = useCallback(async () => {
-    if (!shopId) return;
-    try {
-      const r = await fetch(`/api/sales?shopId=${shopId}&limit=20${salesSearch ? `&search=${salesSearch}` : ''}`);
-      if (r.ok) setRecentSales(await r.json());
-    } catch {}
-  }, [shopId, salesSearch]);
-
-  const fetchQueue = useCallback(async () => {
-    if (!shopId) return;
-    try { const r = await fetch(`/api/queue?shopId=${shopId}`); if (r.ok) setQueueData(await r.json()); } catch {}
-  }, [shopId]);
-
-  const fetchReports = useCallback(async () => {
-    if (!shopId) return;
-    try {
-      const params = new URLSearchParams({ shopId, period: reportPeriod });
-      if (reportFrom) params.set('from', reportFrom);
-      if (reportTo) params.set('to', reportTo);
-      const [r, pnl] = await Promise.all([
-        fetch(`/api/reports?${params}`),
-        fetch(`/api/profit-loss?${params}`),
-      ]);
-      if (r.ok) setReportData(await r.json());
-      if (pnl.ok) setPnlData(await pnl.json());
-    } catch {}
-  }, [shopId, reportPeriod, reportFrom, reportTo]);
-
-  // View-based data fetching
-  useEffect(() => {
-    if (!shopId) return;
-    const fetchers: Record<View, () => void> = {
-      dashboard: fetchDashboard,
-      'new-sale': async () => { await fetchServices(); await fetchProducts(); await fetchBarbers(); },
-      queue: fetchQueue,
-      clients: () => fetchClients(),
-      expenses: fetchExpenses,
-      reports: fetchReports,
-      inventory: async () => { await fetchProducts(); await fetchServices(); },
-      barbers: fetchBarbers,
-      settings: () => {},
-    };
-    fetchers[currentView]?.();
-  }, [currentView, shopId, fetchDashboard, fetchServices, fetchProducts, fetchBarbers, fetchClients, fetchExpenses, fetchReports, fetchQueue]);
+  // === DERIVED: filtered expenses for the expenses view ===
+  const filteredExpenses = expenses.filter(e => {
+    if (expenseFilter.category !== 'all' && e.category !== expenseFilter.category) return false;
+    if (expenseFilter.from && e.expenseDate < expenseFilter.from) return false;
+    if (expenseFilter.to && e.expenseDate > expenseFilter.to) return false;
+    if (expenseFilter.search) {
+      const q = expenseFilter.search.toLowerCase();
+      if (!e.description.toLowerCase().includes(q) && !(e.vendor || '').toLowerCase().includes(q)) return false;
+    }
+    return true;
+  }).sort((a, b) => new Date(b.expenseDate).getTime() - new Date(a.expenseDate).getTime());
 
   // === CART LOGIC ===
   const addToCart = (item: Service | Product, itemType: 'service' | 'product') => {
@@ -250,19 +201,27 @@ export default function NiceAndNeat() {
   const cartTip = parseFloat(tipAmount) || 0;
   const cartTotal = cartSubtotal - cartDiscount + cartTip;
 
-  // === CREATE SALE ===
-  const createSale = async () => {
-    if (cart.length === 0 || !shopId) return;
+  // === CREATE SALE (uses store) ===
+  const handleCreateSale = () => {
+    if (cart.length === 0) return;
     try {
-      const res = await fetch('/api/sales', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shopId, items: cart, clientId: selectedClient?.id, barberId: selectedBarber?.id, paymentMethod, mpesaRef, discountAmount: cartDiscount, tipAmount: cartTip, notes: saleNotes }),
+      const sale = createSale({
+        items: cart.map(c => ({ itemType: c.itemType, itemId: c.itemId, itemName: c.itemName, price: c.price, quantity: c.quantity, lineTotal: c.price * c.quantity })),
+        clientId: selectedClient?.id || null,
+        clientName: selectedClient?.name || null,
+        barberId: selectedBarber?.id || null,
+        barberName: selectedBarber?.name || null,
+        subtotal: cartSubtotal,
+        discountAmount: cartDiscount,
+        tipAmount: cartTip,
+        totalAmount: cartTotal,
+        paymentMethod,
+        mpesaRef,
+        notes: saleNotes,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
       setCart([]); setSelectedClient(null); setSelectedBarber(null); setPaymentMethod('cash'); setMpesaRef(''); setDiscountAmount(''); setTipAmount(''); setSaleNotes('');
-      showToast(`Sale ${data.invoiceNumber} recorded!`, 'success');
-      fetchDashboard();
+      showToast(`Sale ${sale.invoiceNumber} recorded!`, 'success');
+      refresh();
     } catch (err: any) { showToast(err.message, 'error'); }
   };
 
@@ -315,9 +274,6 @@ export default function NiceAndNeat() {
   // RENDER: DASHBOARD
   // ============================================
   const renderDashboard = () => {
-    if (loadingError) return <div className="flex flex-col items-center justify-center h-64 text-center"><AlertTriangle className="w-10 h-10 text-amber-500 mb-2" /><p className="text-sm font-medium">Connection error</p><p className="text-xs text-muted-foreground mt-1">{loadingError}</p><button onClick={fetchDashboard} className="mt-3 px-4 py-2 btn-primary rounded-lg text-sm">Retry</button></div>;
-    if (!dashboard) return <div className="flex items-center justify-center h-64"><RefreshCw className="w-8 h-8 animate-spin text-primary" /></div>;
-
     return (
       <div className="space-y-5 animate-in">
         {/* Hero: Today's Performance */}
@@ -421,7 +377,7 @@ export default function NiceAndNeat() {
               <div className="space-y-2">
                 {dashboard.recentSales.slice(0, 5).map(sale => (
                   <div key={sale.id} className="flex items-center justify-between p-2 rounded-lg hover:bg-muted/50 transition">
-                    <div><p className="text-sm font-medium">{sale.invoiceNumber}</p><p className="text-xs text-muted-foreground">{sale.client?.name || 'Walk-in'} • {new Date(sale.saleDate).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' })}</p></div>
+                    <div><p className="text-sm font-medium">{sale.invoiceNumber}</p><p className="text-xs text-muted-foreground">{(sale as any).clientName || 'Walk-in'} • {new Date(sale.saleDate).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' })}</p></div>
                     <div className="text-right"><p className="text-sm font-bold">{formatCurrency(sale.totalAmount)}</p><p className="text-xs text-muted-foreground capitalize">{sale.paymentMethod}</p></div>
                   </div>
                 ))}
@@ -535,7 +491,7 @@ export default function NiceAndNeat() {
                   </div>
                 ) : (
                   <div className="relative mt-1">
-                    <input type="text" placeholder="Search client..." value={clientSearch} onChange={e => { setClientSearch(e.target.value); setShowClientSelect(true); fetchClients(e.target.value); }} onFocus={() => setShowClientSelect(true)} className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" />
+                    <input type="text" placeholder="Search client..." value={clientSearch} onChange={e => { setClientSearch(e.target.value); setShowClientSelect(true); }} onFocus={() => setShowClientSelect(true)} className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" />
                     {showClientSelect && clientSearch && (
                       <div className="absolute z-10 mt-1 w-full bg-card border border-border rounded-lg shadow-lg max-h-40 overflow-y-auto">
                         {filteredClients.map(c => (
@@ -578,7 +534,7 @@ export default function NiceAndNeat() {
             </div>
             {paymentMethod === 'mpesa' && <input type="text" value={mpesaRef} onChange={e => setMpesaRef(e.target.value.toUpperCase())} placeholder="M-Pesa Ref (e.g. QFG3XK2P9Y)" className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary font-mono" />}
 
-            <button onClick={createSale} disabled={cart.length === 0} className="w-full py-3 btn-primary rounded-xl font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+            <button onClick={handleCreateSale} disabled={cart.length === 0} className="w-full py-3 btn-primary rounded-xl font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
               <CheckCircle className="w-5 h-5" /> Complete Sale
             </button>
           </div>
@@ -591,7 +547,6 @@ export default function NiceAndNeat() {
   // RENDER: WALK-IN QUEUE
   // ============================================
   const renderQueue = () => {
-    if (!queueData) return <div className="flex items-center justify-center h-64"><RefreshCw className="w-8 h-8 animate-spin text-primary" /></div>;
     const { queue = [], stats = {} } = queueData;
     return (
       <div className="space-y-4">
@@ -649,9 +604,9 @@ export default function NiceAndNeat() {
                       </div>
                     </div>
                     <div className="flex gap-1.5">
-                      <button onClick={async () => { await fetch('/api/queue', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: entry.id, action: 'seat' }) }); fetchQueue(); showToast(`${entry.clientName} seated (waited ${waitMin} min)`, 'success'); }} className="px-3 py-1.5 text-xs bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded-lg font-medium hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition">Seat</button>
-                      <button onClick={async () => { await fetch('/api/queue', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: entry.id, action: 'no_show' }) }); fetchQueue(); showToast(`${entry.clientName} marked as no-show`, 'warning'); }} className="px-3 py-1.5 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg font-medium hover:bg-red-200 dark:hover:bg-red-900/50 transition">No-Show</button>
-                      <button onClick={async () => { await fetch('/api/queue', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: entry.id, action: 'cancel' }) }); fetchQueue(); }} className="px-2 py-1.5 text-xs bg-muted text-muted-foreground rounded-lg hover:bg-muted/70 transition"><X className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => { updateQueueEntry(entry.id, 'seat'); refresh(); showToast(`${entry.clientName} seated (waited ${waitMin} min)`, 'success'); }} className="px-3 py-1.5 text-xs bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded-lg font-medium hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition">Seat</button>
+                      <button onClick={() => { updateQueueEntry(entry.id, 'no_show'); refresh(); showToast(`${entry.clientName} marked as no-show`, 'warning'); }} className="px-3 py-1.5 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg font-medium hover:bg-red-200 dark:hover:bg-red-900/50 transition">No-Show</button>
+                      <button onClick={() => { updateQueueEntry(entry.id, 'cancel'); refresh(); }} className="px-2 py-1.5 text-xs bg-muted text-muted-foreground rounded-lg hover:bg-muted/70 transition"><X className="w-3.5 h-3.5" /></button>
                     </div>
                   </div>
                 </div>
@@ -673,7 +628,7 @@ export default function NiceAndNeat() {
                 </div>
                 <div><label className="text-xs text-muted-foreground">Preferred Barber (optional)</label><select value={newQueueEntry.preferredBarberId} onChange={e => setNewQueueEntry(q => ({ ...q, preferredBarberId: e.target.value }))} className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"><option value="">Any available</option>{barbers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
                 <div><label className="text-xs text-muted-foreground">Notes (preferences)</label><input type="text" value={newQueueEntry.notes} onChange={e => setNewQueueEntry(q => ({ ...q, notes: e.target.value }))} placeholder="e.g. Wants skin fade" className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" /></div>
-                <button onClick={async () => { if (!newQueueEntry.clientName) { showToast('Name required', 'error'); return; } try { const r = await fetch('/api/queue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shopId, ...newQueueEntry, partySize: parseInt(newQueueEntry.partySize) }) }); if (!r.ok) throw new Error((await r.json()).error); setShowAddQueue(false); setNewQueueEntry({ clientName: '', clientPhone: '', partySize: '1', preferredBarberId: '', notes: '' }); fetchQueue(); showToast('Added to queue!', 'success'); } catch (e: any) { showToast(e.message, 'error'); } }} className="w-full py-2.5 btn-primary rounded-lg text-sm">Add to Queue</button>
+                <button onClick={() => { if (!newQueueEntry.clientName) { showToast('Name required', 'error'); return; } addToQueue({ ...newQueueEntry, partySize: parseInt(newQueueEntry.partySize) }); setShowAddQueue(false); setNewQueueEntry({ clientName: '', clientPhone: '', partySize: '1', preferredBarberId: '', notes: '' }); refresh(); showToast('Added to queue!', 'success'); }} className="w-full py-2.5 btn-primary rounded-lg text-sm">Add to Queue</button>
               </div>
             </div>
           </div>
@@ -685,57 +640,65 @@ export default function NiceAndNeat() {
   // ============================================
   // RENDER: CLIENTS
   // ============================================
-  const renderClients = () => (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <h2 className="text-xl font-bold">Clients</h2>
-        <div className="flex items-center gap-2">
-          <div className="relative"><Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" /><input type="text" placeholder="Search clients..." onChange={e => fetchClients(e.target.value)} className="pl-8 pr-3 py-1.5 bg-card border border-border rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-primary w-44" /></div>
-          <button onClick={() => setShowNewClient(true)} className="flex items-center gap-2 px-3 py-1.5 btn-primary rounded-lg text-xs"><Plus className="w-3.5 h-3.5" /> Add Client</button>
+  const renderClients = () => {
+    const filteredClientsForList = clientListSearch
+      ? clients.filter(c => c.name.toLowerCase().includes(clientListSearch.toLowerCase()) || (c.phone || '').includes(clientListSearch))
+      : clients;
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <h2 className="text-xl font-bold">Clients</h2>
+          <div className="flex items-center gap-2">
+            <div className="relative"><Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" /><input type="text" placeholder="Search clients..." value={clientListSearch} onChange={e => setClientListSearch(e.target.value)} className="pl-8 pr-3 py-1.5 bg-card border border-border rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-primary w-44" /></div>
+            <button onClick={() => setShowNewClient(true)} className="flex items-center gap-2 px-3 py-1.5 btn-primary rounded-lg text-xs"><Plus className="w-3.5 h-3.5" /> Add Client</button>
+          </div>
         </div>
-      </div>
 
-      {clients.length === 0 ? <div className="text-center py-12 text-muted-foreground"><Users className="w-12 h-12 mx-auto mb-3 opacity-50" /><p>No clients yet</p></div> : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {clients.map(client => (
-            <div key={client.id} className="card-interactive rounded-xl p-4">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center font-bold text-white text-sm">{client.name.split(' ').map(n => n[0]).join('').slice(0, 2)}</div>
-                  <div>
-                    <p className="font-semibold text-sm">{client.name}</p>
-                    <p className="text-xs text-muted-foreground">{client.phone || 'No phone'}</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  {client.loyaltyPoints > 0 && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 font-semibold">{client.loyaltyPoints} pts</span>}
-                </div>
-              </div>
-              <div className="grid grid-cols-3 gap-2 mt-3 text-center">
-                <div className="bg-muted/50 rounded-lg p-2"><p className="text-xs text-muted-foreground">Visits</p><p className="text-sm font-bold">{client.totalVisits}</p></div>
-                <div className="bg-muted/50 rounded-lg p-2"><p className="text-xs text-muted-foreground">Spent</p><p className="text-sm font-bold">{formatCurrency(client.totalSpent)}</p></div>
-                <div className="bg-muted/50 rounded-lg p-2"><p className="text-xs text-muted-foreground">Last Visit</p><p className="text-sm font-bold">{client.lastVisitAt ? new Date(client.lastVisitAt).toLocaleDateString('en-KE', { day: 'numeric', month: 'short' }) : '—'}</p></div>
-              </div>
-              {client.notes && <p className="text-xs text-muted-foreground mt-2 italic">&ldquo;{client.notes}&rdquo;</p>}
-              {client.sales && client.sales.length > 0 && (
-                <div className="mt-2 pt-2 border-t border-border">
-                  <p className="text-xs font-medium mb-1">Recent visits:</p>
-                  <div className="space-y-1">
-                    {client.sales.slice(0, 3).map((s: any) => (
-                      <div key={s.id} className="flex items-center justify-between text-xs">
-                        <span className="text-muted-foreground">{new Date(s.saleDate).toLocaleDateString('en-KE', { day: 'numeric', month: 'short' })} — {s.items.map((i: any) => i.itemName).join(', ')}</span>
-                        <span className="font-medium">{formatCurrency(s.totalAmount)}</span>
+        {filteredClientsForList.length === 0 ? <div className="text-center py-12 text-muted-foreground"><Users className="w-12 h-12 mx-auto mb-3 opacity-50" /><p>No clients yet</p></div> : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {filteredClientsForList.map(client => {
+              const clientSales = data.sales.filter(s => s.clientId === client.id).slice(0, 3);
+              return (
+                <div key={client.id} className="card-interactive rounded-xl p-4">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center font-bold text-white text-sm">{client.name.split(' ').map(n => n[0]).join('').slice(0, 2)}</div>
+                      <div>
+                        <p className="font-semibold text-sm">{client.name}</p>
+                        <p className="text-xs text-muted-foreground">{client.phone || 'No phone'}</p>
                       </div>
-                    ))}
+                    </div>
+                    <div className="text-right">
+                      {client.loyaltyPoints > 0 && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 font-semibold">{client.loyaltyPoints} pts</span>}
+                    </div>
                   </div>
+                  <div className="grid grid-cols-3 gap-2 mt-3 text-center">
+                    <div className="bg-muted/50 rounded-lg p-2"><p className="text-xs text-muted-foreground">Visits</p><p className="text-sm font-bold">{client.totalVisits}</p></div>
+                    <div className="bg-muted/50 rounded-lg p-2"><p className="text-xs text-muted-foreground">Spent</p><p className="text-sm font-bold">{formatCurrency(client.totalSpent)}</p></div>
+                    <div className="bg-muted/50 rounded-lg p-2"><p className="text-xs text-muted-foreground">Last Visit</p><p className="text-sm font-bold">{client.lastVisitAt ? new Date(client.lastVisitAt).toLocaleDateString('en-KE', { day: 'numeric', month: 'short' }) : '—'}</p></div>
+                  </div>
+                  {client.notes && <p className="text-xs text-muted-foreground mt-2 italic">&ldquo;{client.notes}&rdquo;</p>}
+                  {clientSales.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-border">
+                      <p className="text-xs font-medium mb-1">Recent visits:</p>
+                      <div className="space-y-1">
+                        {clientSales.map((s: any) => (
+                          <div key={s.id} className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground">{new Date(s.saleDate).toLocaleDateString('en-KE', { day: 'numeric', month: 'short' })} — {s.items.map((i: any) => i.itemName).join(', ')}</span>
+                            <span className="font-medium">{formatCurrency(s.totalAmount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // ============================================
   // RENDER: EXPENSES
@@ -760,9 +723,14 @@ export default function NiceAndNeat() {
           <div><label className="text-xs text-muted-foreground">Vendor (optional)</label><input type="text" value={newExpense.vendor} onChange={e => setNewExpense(p => ({ ...p, vendor: e.target.value }))} placeholder="e.g. Kenya Power" className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" /></div>
           <div><label className="text-xs text-muted-foreground">Date</label><input type="date" value={newExpense.expenseDate} onChange={e => setNewExpense(p => ({ ...p, expenseDate: e.target.value }))} className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" /></div>
         </div>
-        <button onClick={async () => {
+        <button onClick={() => {
           if (!newExpense.description || !newExpense.amount) { showToast('Description and amount required', 'error'); return; }
-          try { const r = await fetch('/api/expenses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shopId, ...newExpense, amount: parseFloat(newExpense.amount), expenseDate: newExpense.expenseDate || new Date().toISOString().split('T')[0] }) }); if (!r.ok) throw new Error((await r.json()).error); setNewExpense({ category: 'supplies', description: '', amount: '', paymentMethod: 'cash', vendor: '', expenseDate: '' }); fetchExpenses(); showToast('Expense recorded!', 'success'); } catch (e: any) { showToast(e.message, 'error'); }
+          try {
+            createExpense({ ...newExpense, amount: parseFloat(newExpense.amount), expenseDate: newExpense.expenseDate || new Date().toISOString().split('T')[0] });
+            setNewExpense({ category: 'supplies', description: '', amount: '', paymentMethod: 'cash', vendor: '', expenseDate: '' });
+            refresh();
+            showToast('Expense recorded!', 'success');
+          } catch (e: any) { showToast(e.message, 'error'); }
         }} className="mt-3 px-4 py-2 btn-primary rounded-lg text-sm font-medium">Save Expense</button>
       </div>
 
@@ -779,9 +747,9 @@ export default function NiceAndNeat() {
       </div>
 
       {/* Expenses List */}
-      {expenses.length === 0 ? <div className="text-center py-12 text-muted-foreground"><CreditCard className="w-12 h-12 mx-auto mb-3 opacity-50" /><p>No expenses found</p></div> : (
+      {filteredExpenses.length === 0 ? <div className="text-center py-12 text-muted-foreground"><CreditCard className="w-12 h-12 mx-auto mb-3 opacity-50" /><p>No expenses found</p></div> : (
         <div className="space-y-2">
-          {expenses.map(exp => (
+          {filteredExpenses.map(exp => (
             <div key={exp.id} className="card-interactive rounded-xl p-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${exp.category === 'rent' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : exp.category === 'utilities' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400' : exp.category === 'salaries' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400' : exp.category === 'supplies' ? 'bg-teal-100 dark:bg-teal-900/30 text-teal-600 dark:text-teal-400' : 'bg-muted text-muted-foreground'}`}>
@@ -794,7 +762,7 @@ export default function NiceAndNeat() {
               </div>
               <div className="text-right">
                 <p className="font-bold text-sm text-red-600 dark:text-red-400">{formatCurrency(exp.amount)}</p>
-                <button onClick={async () => { if (confirm('Delete this expense?')) { await fetch(`/api/expenses?id=${exp.id}`, { method: 'DELETE' }); fetchExpenses(); showToast('Expense deleted', 'warning'); } }} className="text-xs text-muted-foreground hover:text-destructive mt-1">Delete</button>
+                <button onClick={() => { if (confirm('Delete this expense?')) { deleteExpense(exp.id); refresh(); showToast('Expense deleted', 'warning'); } }} className="text-xs text-muted-foreground hover:text-destructive mt-1">Delete</button>
               </div>
             </div>
           ))}
@@ -807,7 +775,6 @@ export default function NiceAndNeat() {
   // RENDER: REPORTS
   // ============================================
   const renderReports = () => {
-    const fmtPct = (val: number) => `${val >= 0 ? '+' : ''}${val.toFixed(1)}%`;
     const changePct = (curr: number, prev: number) => prev === 0 ? (curr > 0 ? 100 : 0) : ((curr - prev) / Math.abs(prev)) * 100;
     const pnl = pnlData?.current;
     const prev = pnlData?.previous;
@@ -819,7 +786,7 @@ export default function NiceAndNeat() {
             <h2 className="text-xl font-bold">Profit & Loss Statement</h2>
             <p className="text-xs text-muted-foreground">Daily, weekly, monthly & yearly financial reports</p>
           </div>
-          <button onClick={async () => {
+          <button onClick={() => {
             if (!pnl) return;
             // Export full P&L as CSV
             const csv: string[][] = [['Nice & Neat — Profit & Loss Statement']];
@@ -858,7 +825,7 @@ export default function NiceAndNeat() {
         <div className="bg-card rounded-xl border border-border p-3 flex flex-wrap items-center gap-3">
           <div className="flex gap-1 bg-muted rounded-lg p-1">
             {(['daily', 'weekly', 'monthly', 'yearly'] as const).map(p => (
-              <button key={p} onClick={() => { setReportPeriod(p); setReportFrom(''); setReportTo(''); setTimeout(fetchReports, 50); }} className={`px-4 py-1.5 text-xs rounded-md font-medium capitalize transition ${reportPeriod === p && !reportFrom ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground'}`}>{p}</button>
+              <button key={p} onClick={() => { setReportPeriod(p); setReportFrom(''); setReportTo(''); }} className={`px-4 py-1.5 text-xs rounded-md font-medium capitalize transition ${reportPeriod === p && !reportFrom ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground'}`}>{p}</button>
             ))}
           </div>
           <div className="flex items-center gap-1">
@@ -866,7 +833,7 @@ export default function NiceAndNeat() {
             <span className="text-xs text-muted-foreground">to</span>
             <input type="date" value={reportTo} onChange={e => setReportTo(e.target.value)} className="px-2 py-1.5 text-xs bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary" />
           </div>
-          <button onClick={fetchReports} className="px-3 py-1.5 text-xs btn-primary rounded-lg">Generate Report</button>
+          <button onClick={() => { refresh(); showToast('Report generated!', 'success'); }} className="px-3 py-1.5 text-xs btn-primary rounded-lg">Generate Report</button>
           {pnlData?.range && <span className="text-xs text-muted-foreground ml-auto">{pnlData.range.from.split('T')[0]} → {pnlData.range.to.split('T')[0]} {prev && <span className="text-muted-foreground/70">(vs {pnlData.previousRange.from.split('T')[0]} → {pnlData.previousRange.to.split('T')[0]})</span>}</span>}
         </div>
 
@@ -1090,59 +1057,65 @@ export default function NiceAndNeat() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="bg-card rounded-2xl border border-border p-5">
                   <h3 className="font-bold text-sm mb-3 flex items-center gap-2"><Scissors className="w-4 h-4 text-primary" /> Service Breakdown</h3>
-                  <div className="space-y-2">
-                    {reportData.serviceBreakdown.map((s: any, i: number) => (
-                      <div key={i} className="p-2 rounded-lg bg-muted/50">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm font-medium">{s.name}</span>
-                          <span className="text-sm font-bold">{formatCurrency(s.revenue)}</span>
+                  {reportData.serviceBreakdown.length === 0 ? <p className="text-sm text-muted-foreground text-center py-4">No service sales in this period</p> : (
+                    <div className="space-y-2">
+                      {reportData.serviceBreakdown.map((s: any, i: number) => (
+                        <div key={i} className="p-2 rounded-lg bg-muted/50">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium">{s.name}</span>
+                            <span className="text-sm font-bold">{formatCurrency(s.revenue)}</span>
+                          </div>
+                          <div className="flex items-center justify-between mt-1">
+                            <span className="text-xs text-muted-foreground">{s.count} times</span>
+                            <span className="text-xs text-muted-foreground">{formatCurrency(s.revenue / s.count)} avg</span>
+                          </div>
+                          <div className="w-full bg-background rounded-full h-1.5 mt-2">
+                            <div className="bg-primary h-1.5 rounded-full" style={{ width: `${(s.revenue / reportData.serviceBreakdown[0].revenue) * 100}%` }} />
+                          </div>
                         </div>
-                        <div className="flex items-center justify-between mt-1">
-                          <span className="text-xs text-muted-foreground">{s.count} times</span>
-                          <span className="text-xs text-muted-foreground">{formatCurrency(s.revenue / s.count)} avg</span>
-                        </div>
-                        <div className="w-full bg-background rounded-full h-1.5 mt-2">
-                          <div className="bg-primary h-1.5 rounded-full" style={{ width: `${(s.revenue / reportData.serviceBreakdown[0].revenue) * 100}%` }} />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="bg-card rounded-2xl border border-border p-5">
                   <h3 className="font-bold text-sm mb-3 flex items-center gap-2"><CreditCard className="w-4 h-4 text-primary" /> Expense Breakdown</h3>
-                  <div className="space-y-2">
-                    {reportData.expenseBreakdown.map((e: any, i: number) => {
-                      const totalExp = reportData.expenseBreakdown.reduce((s: number, x: any) => s + x.amount, 0);
-                      const pct = totalExp > 0 ? (e.amount / totalExp) * 100 : 0;
-                      return (
-                        <div key={i} className="p-2 rounded-lg bg-muted/50">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium capitalize">{e.category}</span>
-                            <span className="text-sm font-bold text-red-600 dark:text-red-400">{formatCurrency(e.amount)}</span>
+                  {reportData.expenseBreakdown.length === 0 ? <p className="text-sm text-muted-foreground text-center py-4">No expenses in this period</p> : (
+                    <div className="space-y-2">
+                      {reportData.expenseBreakdown.map((e: any, i: number) => {
+                        const totalExp = reportData.expenseBreakdown.reduce((s: number, x: any) => s + x.amount, 0);
+                        const pct = totalExp > 0 ? (e.amount / totalExp) * 100 : 0;
+                        return (
+                          <div key={i} className="p-2 rounded-lg bg-muted/50">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium capitalize">{e.category}</span>
+                              <span className="text-sm font-bold text-red-600 dark:text-red-400">{formatCurrency(e.amount)}</span>
+                            </div>
+                            <div className="flex items-center justify-between mt-1">
+                              <span className="text-xs text-muted-foreground">{pct.toFixed(0)}% of total</span>
+                            </div>
+                            <div className="w-full bg-background rounded-full h-1.5 mt-2">
+                              <div className="bg-red-400 dark:bg-red-600 h-1.5 rounded-full" style={{ width: `${pct}%` }} />
+                            </div>
                           </div>
-                          <div className="flex items-center justify-between mt-1">
-                            <span className="text-xs text-muted-foreground">{pct.toFixed(0)}% of total</span>
-                          </div>
-                          <div className="w-full bg-background rounded-full h-1.5 mt-2">
-                            <div className="bg-red-400 dark:bg-red-600 h-1.5 rounded-full" style={{ width: `${pct}%` }} />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
                 <div className="bg-card rounded-2xl border border-border p-5 md:col-span-2">
                   <h3 className="font-bold text-sm mb-3 flex items-center gap-2"><User className="w-4 h-4 text-primary" /> Barber Performance & Commissions</h3>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-muted/50"><tr><th className="px-4 py-2 text-left text-xs text-muted-foreground">Barber</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Sales</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Revenue</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Commission Due</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Avg Sale</th></tr></thead>
-                      <tbody>
-                        {reportData.barberBreakdown.map((b: any, i: number) => (
-                          <tr key={i} className="border-t border-border hover:bg-muted/30"><td className="px-4 py-2.5 font-medium">{b.name}</td><td className="px-4 py-2.5 text-right">{b.sales}</td><td className="px-4 py-2.5 text-right font-bold">{formatCurrency(b.revenue)}</td><td className="px-4 py-2.5 text-right text-amber-600 dark:text-amber-400 font-medium">{formatCurrency(b.commission)}</td><td className="px-4 py-2.5 text-right text-muted-foreground">{formatCurrency(b.revenue / b.sales)}</td></tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  {reportData.barberBreakdown.length === 0 ? <p className="text-sm text-muted-foreground text-center py-4">No barber sales in this period</p> : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/50"><tr><th className="px-4 py-2 text-left text-xs text-muted-foreground">Barber</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Sales</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Revenue</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Commission Due</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Avg Sale</th></tr></thead>
+                        <tbody>
+                          {reportData.barberBreakdown.map((b: any, i: number) => (
+                            <tr key={i} className="border-t border-border hover:bg-muted/30"><td className="px-4 py-2.5 font-medium">{b.name}</td><td className="px-4 py-2.5 text-right">{b.sales}</td><td className="px-4 py-2.5 text-right font-bold">{formatCurrency(b.revenue)}</td><td className="px-4 py-2.5 text-right text-amber-600 dark:text-amber-400 font-medium">{formatCurrency(b.commission)}</td><td className="px-4 py-2.5 text-right text-muted-foreground">{b.sales > 0 ? formatCurrency(b.revenue / b.sales) : formatCurrency(0)}</td></tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1157,7 +1130,7 @@ export default function NiceAndNeat() {
                       {pnlData.sales.length === 0 ? <p className="text-xs text-muted-foreground text-center py-4">No sales in this period</p> :
                         pnlData.sales.map((s: any) => (
                           <div key={s.id} className="flex items-center justify-between p-2 rounded-lg bg-muted/30 hover:bg-muted/60 transition">
-                            <div><p className="text-xs font-mono">{s.invoiceNumber}</p><p className="text-xs text-muted-foreground">{new Date(s.saleDate).toLocaleDateString('en-KE')} • {s.barber?.name || '—'}</p></div>
+                            <div><p className="text-xs font-mono">{s.invoiceNumber}</p><p className="text-xs text-muted-foreground">{new Date(s.saleDate).toLocaleDateString('en-KE')} • {s.barberName || '—'}</p></div>
                             <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(s.totalAmount)}</span>
                           </div>
                         ))
@@ -1216,7 +1189,7 @@ export default function NiceAndNeat() {
                   <div><p className="text-xs text-muted-foreground">In Stock</p><p className={`text-sm font-bold ${p.quantity <= p.reorderLevel ? 'text-amber-600 dark:text-amber-400' : ''}`}>{p.quantity}</p></div>
                   <div><p className="text-xs text-muted-foreground">Reorder At</p><p className="text-sm">{p.reorderLevel}</p></div>
                 </div>
-                <button onClick={async () => { const newQty = prompt(`Update stock for ${p.name} (current: ${p.quantity}):`, String(p.quantity)); if (newQty !== null) { await fetch('/api/products', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: p.id, quantity: parseInt(newQty) }) }); fetchProducts(); showToast('Stock updated!', 'success'); } }} className="w-full mt-3 py-1.5 text-xs bg-muted rounded-lg hover:bg-primary/10 transition">Adjust Stock</button>
+                <button onClick={() => { const newQty = prompt(`Update stock for ${p.name} (current: ${p.quantity}):`, String(p.quantity)); if (newQty !== null) { updateProduct(p.id, { quantity: parseInt(newQty) }); refresh(); showToast('Stock updated!', 'success'); } }} className="w-full mt-3 py-1.5 text-xs bg-muted rounded-lg hover:bg-primary/10 transition">Adjust Stock</button>
               </div>
             ))}
           </div>
@@ -1289,21 +1262,58 @@ export default function NiceAndNeat() {
       <div className="bg-card border border-border rounded-2xl p-6">
         <h3 className="font-semibold mb-4 flex items-center gap-2"><Store className="w-5 h-5 text-primary" /> Shop Information</h3>
         <div className="space-y-3">
-          <div><label className="text-xs text-muted-foreground">Shop Name</label><input type="text" defaultValue="Nice & Neat" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
-          <div><label className="text-xs text-muted-foreground">Tagline</label><input type="text" defaultValue="Premium Barber Shop" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
+          <div><label className="text-xs text-muted-foreground">Shop Name</label><input type="text" value={shopForm.name} onChange={e => setShopForm(s => ({ ...s, name: e.target.value }))} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
+          <div><label className="text-xs text-muted-foreground">Tagline</label><input type="text" value={shopForm.tagline} onChange={e => setShopForm(s => ({ ...s, tagline: e.target.value }))} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="text-xs text-muted-foreground">Phone</label><input type="tel" defaultValue="254712345678" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
-            <div><label className="text-xs text-muted-foreground">Email</label><input type="email" defaultValue="hello@niceandneat.co.ke" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
+            <div><label className="text-xs text-muted-foreground">Phone</label><input type="tel" value={shopForm.phone} onChange={e => setShopForm(s => ({ ...s, phone: e.target.value }))} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
+            <div><label className="text-xs text-muted-foreground">Email</label><input type="email" value={shopForm.email} onChange={e => setShopForm(s => ({ ...s, email: e.target.value }))} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
           </div>
-          <div><label className="text-xs text-muted-foreground">Address</label><input type="text" defaultValue="Westlands Road, Nairobi" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
-          <div><label className="text-xs text-muted-foreground">Receipt Footer</label><input type="text" defaultValue="Thank you for choosing Nice & Neat!" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
+          <div><label className="text-xs text-muted-foreground">Address</label><input type="text" value={shopForm.address} onChange={e => setShopForm(s => ({ ...s, address: e.target.value }))} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
+          <div><label className="text-xs text-muted-foreground">Receipt Footer</label><input type="text" value={shopForm.receiptFooter} onChange={e => setShopForm(s => ({ ...s, receiptFooter: e.target.value }))} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
+          <button onClick={() => { saveData({ ...loadData(), shop: shopForm }); refresh(); showToast('Shop info saved!', 'success'); }} className="px-4 py-2 btn-primary rounded-lg text-sm flex items-center gap-2"><Save className="w-4 h-4" /> Save Changes</button>
         </div>
       </div>
       <div className="bg-card border border-border rounded-2xl p-6">
-        <h3 className="font-semibold mb-4">Data & Backup</h3>
-        <p className="text-sm text-muted-foreground mb-3">Your data is stored locally and persists between sessions. All sales, expenses, clients, and reports are saved automatically.</p>
-        <div className="flex gap-2">
-          <button onClick={() => { fetchDashboard(); fetchServices(); fetchProducts(); fetchClients(); fetchBarbers(); fetchExpenses(); showToast('Data refreshed!', 'success'); }} className="px-4 py-2 btn-primary rounded-lg text-sm">Refresh Data</button>
+        <h3 className="font-semibold mb-4 flex items-center gap-2"><Download className="w-5 h-5 text-primary" /> Data & Backup</h3>
+        <p className="text-sm text-muted-foreground mb-3">Your data is saved on this device. Export regularly for backup.</p>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => {
+            const json = exportData();
+            const blob = new Blob([json], { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `nice-neat-backup-${new Date().toISOString().split('T')[0]}.json`;
+            a.click();
+            refresh();
+            showToast('Data exported!', 'success');
+          }} className="px-4 py-2 btn-primary rounded-lg text-sm flex items-center gap-2"><Download className="w-4 h-4" /> Export Data</button>
+          <label className="px-4 py-2 card-interactive rounded-lg text-sm border border-border flex items-center gap-2 cursor-pointer hover:border-primary transition">
+            <FileText className="w-4 h-4" /> Import Data
+            <input type="file" accept="application/json" className="hidden" onChange={e => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const reader = new FileReader();
+              reader.onload = (ev) => {
+                const ok = importData(String(ev.target?.result));
+                if (ok) { refresh(); showToast('Data imported successfully!', 'success'); }
+                else { showToast('Invalid backup file', 'error'); }
+              };
+              reader.readAsText(file);
+              e.target.value = '';
+            }} />
+          </label>
+          <button onClick={() => {
+            if (confirm('This will DELETE all your data and reset to defaults. This cannot be undone. Are you sure?')) {
+              resetData();
+              refresh();
+              setShopForm(loadData().shop);
+              showToast('Data reset to defaults', 'warning');
+            }
+          }} className="px-4 py-2 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg text-sm flex items-center gap-2 hover:bg-red-200 dark:hover:bg-red-900/50 transition"><Trash2 className="w-4 h-4" /> Reset Data</button>
+          <button onClick={() => { refresh(); setShopForm(loadData().shop); showToast('Data refreshed!', 'success'); }} className="px-4 py-2 bg-muted text-muted-foreground rounded-lg text-sm flex items-center gap-2 hover:bg-muted/70 transition"><RefreshCw className="w-4 h-4" /> Refresh Data</button>
+        </div>
+        <div className="mt-3 text-xs text-muted-foreground">
+          {data.lastBackup ? `Last backup: ${new Date(data.lastBackup).toLocaleString('en-KE')}` : 'No exports yet — export your data regularly to avoid loss.'}
         </div>
       </div>
     </div>
@@ -1326,7 +1336,7 @@ export default function NiceAndNeat() {
                 <div><label className="text-xs text-muted-foreground">Price (KES)</label><input type="number" value={newService.price} onChange={e => setNewService(s => ({ ...s, price: e.target.value }))} className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" /></div>
                 <div><label className="text-xs text-muted-foreground">Duration (min)</label><input type="number" value={newService.duration} onChange={e => setNewService(s => ({ ...s, duration: e.target.value }))} className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" /></div>
               </div>
-              <button onClick={async () => { try { const r = await fetch('/api/services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shopId, ...newService, price: parseFloat(newService.price), duration: parseInt(newService.duration) }) }); if (!r.ok) throw new Error((await r.json()).error); setShowNewService(false); setNewService({ name: '', category: 'Haircut', price: '', duration: '30' }); fetchServices(); showToast('Service added!', 'success'); } catch (e: any) { showToast(e.message, 'error'); } }} className="w-full py-2.5 btn-primary rounded-lg text-sm">Add Service</button>
+              <button onClick={() => { try { createService({ ...newService, price: parseFloat(newService.price), duration: parseInt(newService.duration) }); setShowNewService(false); setNewService({ name: '', category: 'Haircut', price: '', duration: '30' }); refresh(); showToast('Service added!', 'success'); } catch (e: any) { showToast(e.message, 'error'); } }} className="w-full py-2.5 btn-primary rounded-lg text-sm">Add Service</button>
             </div>
           </div>
         </div>
@@ -1351,7 +1361,7 @@ export default function NiceAndNeat() {
                 <div><label className="text-xs text-muted-foreground">Quantity</label><input type="number" value={newProduct.quantity} onChange={e => setNewProduct(p => ({ ...p, quantity: e.target.value }))} className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" /></div>
                 <div><label className="text-xs text-muted-foreground">Reorder Level</label><input type="number" value={newProduct.reorderLevel} onChange={e => setNewProduct(p => ({ ...p, reorderLevel: e.target.value }))} className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" /></div>
               </div>
-              <button onClick={async () => { try { const r = await fetch('/api/products', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shopId, ...newProduct, price: parseFloat(newProduct.price), costPrice: parseFloat(newProduct.costPrice), quantity: parseInt(newProduct.quantity), reorderLevel: parseInt(newProduct.reorderLevel) }) }); if (!r.ok) throw new Error((await r.json()).error); setShowNewProduct(false); setNewProduct({ name: '', category: 'Styling', price: '', costPrice: '', quantity: '', reorderLevel: '5', unit: 'pcs' }); fetchProducts(); showToast('Product added!', 'success'); } catch (e: any) { showToast(e.message, 'error'); } }} className="w-full py-2.5 btn-primary rounded-lg text-sm">Add Product</button>
+              <button onClick={() => { try { createProduct({ ...newProduct, price: parseFloat(newProduct.price), costPrice: parseFloat(newProduct.costPrice), quantity: parseInt(newProduct.quantity), reorderLevel: parseInt(newProduct.reorderLevel) }); setShowNewProduct(false); setNewProduct({ name: '', category: 'Styling', price: '', costPrice: '', quantity: '', reorderLevel: '5', unit: 'pcs' }); refresh(); showToast('Product added!', 'success'); } catch (e: any) { showToast(e.message, 'error'); } }} className="w-full py-2.5 btn-primary rounded-lg text-sm">Add Product</button>
             </div>
           </div>
         </div>
@@ -1366,7 +1376,7 @@ export default function NiceAndNeat() {
               <div><label className="text-xs text-muted-foreground">Name</label><input type="text" value={newClient.name} onChange={e => setNewClient(c => ({ ...c, name: e.target.value }))} className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" /></div>
               <div><label className="text-xs text-muted-foreground">Phone</label><input type="tel" value={newClient.phone} onChange={e => setNewClient(c => ({ ...c, phone: e.target.value }))} placeholder="254712345678" className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" /></div>
               <div><label className="text-xs text-muted-foreground">Notes (preferences)</label><textarea value={newClient.notes} onChange={e => setNewClient(c => ({ ...c, notes: e.target.value }))} placeholder="e.g. Likes skin fade, no clippers on top" className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary min-h-20" /></div>
-              <button onClick={async () => { try { const r = await fetch('/api/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shopId, ...newClient }) }); if (!r.ok) throw new Error((await r.json()).error); setShowNewClient(false); setNewClient({ name: '', phone: '', email: '', notes: '' }); fetchClients(); showToast('Client added!', 'success'); } catch (e: any) { showToast(e.message, 'error'); } }} className="w-full py-2.5 btn-primary rounded-lg text-sm">Add Client</button>
+              <button onClick={() => { try { createClient({ ...newClient }); setShowNewClient(false); setNewClient({ name: '', phone: '', email: '', notes: '' }); refresh(); showToast('Client added!', 'success'); } catch (e: any) { showToast(e.message, 'error'); } }} className="w-full py-2.5 btn-primary rounded-lg text-sm">Add Client</button>
             </div>
           </div>
         </div>
@@ -1385,7 +1395,7 @@ export default function NiceAndNeat() {
                 <div><label className="text-xs text-muted-foreground">Commission Type</label><select value={newBarber.commissionType} onChange={e => setNewBarber(b => ({ ...b, commissionType: e.target.value }))} className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"><option value="percentage">Percentage</option><option value="flat">Flat Rate</option></select></div>
               </div>
               <div><label className="text-xs text-muted-foreground">Commission Value (% or KES)</label><input type="number" value={newBarber.commissionValue} onChange={e => setNewBarber(b => ({ ...b, commissionValue: e.target.value }))} className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" /></div>
-              <button onClick={async () => { try { const r = await fetch('/api/barbers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shopId, ...newBarber, commissionValue: parseFloat(newBarber.commissionValue) }) }); if (!r.ok) throw new Error((await r.json()).error); setShowNewBarber(false); setNewBarber({ name: '', phone: '', role: 'barber', commissionType: 'percentage', commissionValue: '60' }); fetchBarbers(); showToast('Barber added!', 'success'); } catch (e: any) { showToast(e.message, 'error'); } }} className="w-full py-2.5 btn-primary rounded-lg text-sm">Add Barber</button>
+              <button onClick={() => { try { createBarber({ ...newBarber, commissionValue: parseFloat(newBarber.commissionValue) }); setShowNewBarber(false); setNewBarber({ name: '', phone: '', role: 'barber', commissionType: 'percentage', commissionValue: '60' }); refresh(); showToast('Barber added!', 'success'); } catch (e: any) { showToast(e.message, 'error'); } }} className="w-full py-2.5 btn-primary rounded-lg text-sm">Add Barber</button>
             </div>
           </div>
         </div>
@@ -1396,6 +1406,19 @@ export default function NiceAndNeat() {
   // ============================================
   // MAIN RENDER
   // ============================================
+  if (!data) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="text-center">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center mx-auto mb-3 animate-pulse">
+            <Scissors className="w-6 h-6 text-white" />
+          </div>
+          <p className="text-sm text-muted-foreground">Loading Nice & Neat...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen">
       {renderSidebar()}

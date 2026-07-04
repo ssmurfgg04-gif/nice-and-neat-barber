@@ -1,21 +1,21 @@
 {
-  "name": "Sokoni POS",
-  "short_name": "Sokoni",
-  "description": "KRA eTIMS Compliant Point of Sale",
+  "name": "Nice & Neat — Barber Shop",
+  "short_name": "Nice & Neat",
+  "description": "Premium barber shop management. Track sales, expenses, inventory, clients & barbers with P&L reports.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0c1222",
-  "theme_color": "#059669",
+  "background_color": "#fafbfc",
+  "theme_color": "#d97706",
   "orientation": "portrait-primary",
   "icons": [
     {
       "src": "/logo.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any"
+      "purpose": "any maskable"
     }
   ],
-  "categories": ["business", "finance", "utilities"],
+  "categories": ["business", "finance", "utilities", "lifestyle"],
   "lang": "en",
   "dir": "ltr"
 }
