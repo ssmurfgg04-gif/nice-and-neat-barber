@@ -123,7 +123,7 @@ export interface QueueEntry {
 }
 
 export interface AppData {
-  shop: Shop;
+  shop: Shop | null;
   services: Service[];
   products: Product[];
   clients: Client[];
@@ -133,104 +133,36 @@ export interface AppData {
   queue: QueueEntry[];
   version: number;
   lastBackup: string | null;
+  isOnboarded: boolean;
 }
 
 const STORAGE_KEY = 'niceAndNeat_data';
 const DATA_VERSION = 1;
 
 // ============================================
-// DEFAULT DATA (lightweight — only if empty)
+// EMPTY DATA — app starts completely blank
+// Onboarding flow fills it in
 // ============================================
-function getDefaultData(): AppData {
+function getEmptyData(): AppData {
   const now = new Date().toISOString();
-  const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
-
-  const services: Service[] = [
-    { id: 'svc1', name: 'Classic Haircut', category: 'Haircut', price: 500, duration: 30, isActive: true, createdAt: now },
-    { id: 'svc2', name: 'Skin Fade', category: 'Haircut', price: 800, duration: 45, isActive: true, createdAt: now },
-    { id: 'svc3', name: 'Kids Haircut (Under 12)', category: 'Kids', price: 300, duration: 20, isActive: true, createdAt: now },
-    { id: 'svc4', name: 'Beard Trim & Shape', category: 'Beard', price: 300, duration: 20, isActive: true, createdAt: now },
-    { id: 'svc5', name: 'Hot Towel Shave', category: 'Shave', price: 400, duration: 30, isActive: true, createdAt: now },
-    { id: 'svc6', name: 'Haircut + Beard', category: 'Package', price: 700, duration: 50, isActive: true, createdAt: now },
-    { id: 'svc7', name: 'Haircut + Shave', category: 'Package', price: 850, duration: 60, isActive: true, createdAt: now },
-    { id: 'svc8', name: 'Hair Wash & Style', category: 'Style', price: 350, duration: 25, isActive: true, createdAt: now },
-  ];
-
-  const products: Product[] = [
-    { id: 'prod1', name: 'Suavecito Pomade (Strong)', category: 'Styling', price: 1200, costPrice: 800, quantity: 15, reorderLevel: 5, unit: 'jar', isActive: true, createdAt: now },
-    { id: 'prod2', name: 'Beard Oil - Sandalwood', category: 'Grooming', price: 800, costPrice: 500, quantity: 12, reorderLevel: 4, unit: 'bottle', isActive: true, createdAt: now },
-    { id: 'prod3', name: 'Aftershave Balm', category: 'Aftercare', price: 600, costPrice: 350, quantity: 8, reorderLevel: 3, unit: 'bottle', isActive: true, createdAt: now },
-    { id: 'prod4', name: 'Hair Gel - Extra Hold', category: 'Styling', price: 450, costPrice: 250, quantity: 3, reorderLevel: 5, unit: 'tube', isActive: true, createdAt: now },
-  ];
-
-  const barbers: Barber[] = [
-    { id: 'brb1', name: 'James Mwangi', phone: '254712345678', role: 'owner', commissionType: 'percentage', commissionValue: 100, isActive: true, createdAt: now },
-    { id: 'brb2', name: 'Peter Otieno', phone: '254722111222', role: 'barber', commissionType: 'percentage', commissionValue: 60, isActive: true, createdAt: now },
-    { id: 'brb3', name: 'David Kamau', phone: '254733333444', role: 'barber', commissionType: 'percentage', commissionValue: 55, isActive: true, createdAt: now },
-  ];
-
-  // Light seed: just a few sample sales for today so dashboard isn't empty
-  const sales: Sale[] = [];
-  const sampleServices = [services[0], services[1], services[5], services[3], services[0]];
-  const sampleBarbers = [barbers[1], barbers[2], barbers[1], barbers[0], barbers[2]];
-  for (let i = 0; i < 5; i++) {
-    const svc = sampleServices[i];
-    const brb = sampleBarbers[i];
-    const saleTime = new Date(today);
-    saleTime.setHours(9 + i * 2, 0, 0, 0);
-    sales.push({
-      id: `sale_seed_${i}`,
-      invoiceNumber: `NN-${todayStr.replace(/-/g, '')}-${String(i + 1).padStart(3, '0')}`,
-      clientId: null,
-      clientName: null,
-      barberId: brb.id,
-      barberName: brb.name,
-      items: [{ itemType: 'service', itemId: svc.id, itemName: svc.name, price: svc.price, quantity: 1, lineTotal: svc.price }],
-      subtotal: svc.price,
-      discountAmount: 0,
-      tipAmount: i === 2 ? 100 : 0,
-      totalAmount: svc.price + (i === 2 ? 100 : 0),
-      paymentMethod: i % 2 === 0 ? 'cash' : 'mpesa',
-      mpesaRef: i % 2 === 0 ? null : `QFG${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-      status: 'completed',
-      notes: null,
-      saleDate: saleTime.toISOString(),
-      createdAt: saleTime.toISOString(),
-    });
-  }
-
-  // Sample expenses for this month
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-  const expenses: Expense[] = [
-    { id: 'exp1', category: 'rent', description: `Shop rent - ${today.toLocaleString('en-KE', { month: 'long' })}`, amount: 25000, paymentMethod: 'bank', vendor: 'Property Ltd', expenseDate: monthStart, isRecurring: true, recurringType: 'monthly', notes: null, createdAt: now },
-    { id: 'exp2', category: 'utilities', description: 'Electricity bill', amount: 3500, paymentMethod: 'mpesa', vendor: 'Kenya Power', expenseDate: todayStr, isRecurring: false, recurringType: null, notes: null, createdAt: now },
-    { id: 'exp3', category: 'supplies', description: 'Clipper blades x10', amount: 1800, paymentMethod: 'cash', vendor: 'Barber Supply KE', expenseDate: todayStr, isRecurring: false, recurringType: null, notes: null, createdAt: now },
-  ];
-
   return {
-    shop: {
-      name: 'Nice & Neat',
-      tagline: 'Premium Barber Shop',
-      phone: '254712345678',
-      email: 'hello@niceandneat.co.ke',
-      address: 'Westlands Road, Nairobi',
-      location: 'Westlands, Nairobi',
-      ownerName: 'James Mwangi',
-      receiptFooter: 'Thank you for choosing Nice & Neat!',
-      currency: 'KES',
-      createdAt: now,
-    },
-    services,
-    products,
+    shop: null,
+    services: [],
+    products: [],
     clients: [],
-    barbers,
-    sales,
-    expenses,
+    barbers: [],
+    sales: [],
+    expenses: [],
     queue: [],
     version: DATA_VERSION,
     lastBackup: null,
+    isOnboarded: false,
   };
+}
+
+// Legacy alias — returns empty data (no pre-fed content)
+function getDefaultData(): AppData {
+  return getEmptyData();
 }
 
 // ============================================
@@ -279,13 +211,21 @@ export function resetData(): void {
   loadData();
 }
 
-function getEmptyData(): AppData {
-  const now = new Date().toISOString();
-  return {
-    shop: { name: 'Nice & Neat', tagline: '', phone: '', email: '', address: '', location: '', ownerName: '', receiptFooter: '', currency: 'KES', createdAt: now },
-    services: [], products: [], clients: [], barbers: [], sales: [], expenses: [], queue: [],
-    version: DATA_VERSION, lastBackup: null,
-  };
+// ============================================
+// ONBOARDING — complete setup
+// ============================================
+export function completeOnboarding(shop: Shop, services: Service[], barbers: Barber[]): void {
+  const data = loadData();
+  data.shop = shop;
+  data.services = services;
+  data.barbers = barbers;
+  data.isOnboarded = true;
+  saveData(data);
+}
+
+export function isOnboarded(): boolean {
+  const data = loadData();
+  return data.isOnboarded === true && data.shop !== null;
 }
 
 // ============================================
@@ -301,8 +241,12 @@ export function exportData(): string {
 export function importData(jsonString: string): boolean {
   try {
     const parsed = JSON.parse(jsonString);
-    if (!parsed.shop || !parsed.services || !parsed.sales) {
+    if (!parsed.services || !parsed.sales) {
       throw new Error('Invalid backup file format');
+    }
+    // Ensure isOnboarded is set if shop exists
+    if (parsed.shop && parsed.isOnboarded === undefined) {
+      parsed.isOnboarded = true;
     }
     saveData(parsed);
     return true;

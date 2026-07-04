@@ -10,7 +10,7 @@ import {
   BarChart3, PieChart, Activity, Store, Award, Bell, FileText, Receipt
 } from 'lucide-react';
 import { formatCurrency } from '@/lib/i18n';
-import { loadData, saveData, createSale, createExpense, deleteExpense, createClient, createService, createProduct, updateProduct, createBarber, addToQueue, updateQueueEntry, getDashboardData, getPnLData, getQueueData, exportData, importData, resetData, type AppData } from '@/lib/store';
+import { loadData, saveData, createSale, createExpense, deleteExpense, createClient, createService, createProduct, updateProduct, createBarber, addToQueue, updateQueueEntry, getDashboardData, getPnLData, getQueueData, exportData, importData, resetData, completeOnboarding, type AppData, type Shop, type Service as ServiceType, type Barber as BarberType } from '@/lib/store';
 
 // ============================================
 // TYPES
@@ -81,11 +81,23 @@ export default function NiceAndNeat() {
   const refresh = () => { setData(loadData()); setRefreshKey(k => k + 1); };
 
   // Load data on client mount (avoids SSR localStorage issues)
-  useEffect(() => { setData(loadData()); }, []);
+  useEffect(() => {
+    setData(loadData());
+    // Capture PWA install prompt
+    const handler = (e: any) => { e.preventDefault(); (window as any).deferredPrompt = e; };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  // Onboarding state
+  const [onboardingStep, setOnboardingStep] = useState(0); // 0=shop, 1=services, 2=barbers, 3=done
+  const [obShop, setObShop] = useState({ name: '', tagline: '', phone: '', email: '', address: '', location: '', ownerName: '', receiptFooter: 'Thank you for choosing us!', currency: 'KES' });
+  const [obServices, setObServices] = useState<{ name: string; category: string; price: string; duration: string }[]>([{ name: '', category: 'Haircut', price: '', duration: '30' }]);
+  const [obBarbers, setObBarbers] = useState<{ name: string; phone: string; role: string; commissionType: string; commissionValue: string }[]>([{ name: '', phone: '', role: 'owner', commissionType: 'percentage', commissionValue: '100' }]);
 
   // Shop form (settings) — kept local until saved
   const [shopForm, setShopForm] = useState<any>({ name: 'Nice & Neat', tagline: '', phone: '', email: '', address: '', location: '', ownerName: '', receiptFooter: '', currency: 'KES' });
-  useEffect(() => { if (data) setShopForm(data.shop); }, [data]);
+  useEffect(() => { if (data?.shop) setShopForm(data.shop); }, [data]);
 
   // New Sale state
   const [cart, setCart] = useState<{ itemType: 'service' | 'product'; itemId: string; itemName: string; price: number; quantity: number }[]>([]);
@@ -139,7 +151,7 @@ export default function NiceAndNeat() {
   const barbers = data?.barbers ?? [];
   const expenses = data?.expenses ?? [];
   const recentSales = data?.sales?.slice(0, 20) ?? [];
-  const dashboard: DashboardData = data ? (getDashboardData() as any) : null;
+  const dashboard: DashboardData | null = data ? (getDashboardData() as any) : null;
   const queueData = data ? getQueueData() : null;
   const pnlData = data ? getPnLData(reportPeriod, reportFrom, reportTo) : null;
 
@@ -237,45 +249,76 @@ export default function NiceAndNeat() {
   // RENDER: SIDEBAR
   // ============================================
   const renderSidebar = () => (
-    <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-card border-r border-border transform transition-transform duration-200 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static md:z-auto`}>
-      <div className="flex flex-col h-full">
-        <div className="p-4 border-b border-border">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-md shadow-amber-500/20">
-              <Scissors className="w-6 h-6 text-white" />
-            </div>
-            <div><h1 className="text-lg font-bold gradient-text">Nice & Neat</h1><p className="text-[10px] text-muted-foreground tracking-wide uppercase font-semibold">Barber Shop</p></div>
+    <>
+      {/* Mobile overlay sidebar */}
+      {sidebarOpen && (
+        <aside className="fixed inset-y-0 left-0 z-50 w-64 bg-card border-r border-border md:hidden animate-in slide-in-from-left">
+          <div className="flex flex-col h-full">{renderSidebarContent()}</div>
+        </aside>
+      )}
+      {/* Desktop permanent sidebar */}
+      <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-64 bg-card border-r border-border">
+        <div className="flex flex-col h-full w-full">{renderSidebarContent()}</div>
+      </aside>
+    </>
+  );
+
+  const renderSidebarContent = () => (
+    <>
+      <div className="p-4 border-b border-border">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-md shadow-amber-500/20 shrink-0">
+            <Scissors className="w-6 h-6 text-white" />
           </div>
-        </div>
-        <nav className="flex-1 overflow-y-auto py-2">
-          {navGroups.map(group => (
-            <div key={group.label}>
-              <p className="sidebar-section-label">{group.label}</p>
-              {group.items.map(item => (
-                <button key={item.view} onClick={() => { setCurrentView(item.view); setSidebarOpen(false); }}
-                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-all ${currentView === item.view ? 'nav-item-active' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
-                  {item.icon} {item.label}
-                </button>
-              ))}
-            </div>
-          ))}
-        </nav>
-        <div className="p-3 border-t border-border space-y-1.5">
-          <button onClick={() => setIsDark(d => !d)} className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-lg bg-muted text-muted-foreground hover:text-foreground transition-colors">
-            {isDark ? '☀️ Light Mode' : '🌙 Dark Mode'}
-          </button>
-          <p className="text-[10px] text-center text-muted-foreground">v1.0 • Nice & Neat</p>
+          <div className="min-w-0">
+            <h1 className="text-lg font-bold gradient-text truncate">{data?.shop?.name || 'Nice & Neat'}</h1>
+            <p className="text-[10px] text-muted-foreground tracking-wide uppercase font-semibold">{data?.shop?.tagline || 'Barber Shop'}</p>
+          </div>
+          {sidebarOpen && <button onClick={() => setSidebarOpen(false)} className="md:hidden p-1 hover:bg-muted rounded ml-auto"><X className="w-5 h-5" /></button>}
         </div>
       </div>
-    </aside>
+      <nav className="flex-1 overflow-y-auto py-2">
+        {navGroups.map(group => (
+          <div key={group.label}>
+            <p className="sidebar-section-label">{group.label}</p>
+            {group.items.map(item => (
+              <button key={item.view} onClick={() => { setCurrentView(item.view); setSidebarOpen(false); }}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-all ${currentView === item.view ? 'nav-item-active' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
+                {item.icon} {item.label}
+              </button>
+            ))}
+          </div>
+        ))}
+      </nav>
+      <div className="p-3 border-t border-border space-y-1.5">
+        <button onClick={() => setIsDark(d => !d)} className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-lg bg-muted text-muted-foreground hover:text-foreground transition-colors">
+          {isDark ? '☀️ Light Mode' : '🌙 Dark Mode'}
+        </button>
+        <p className="text-[10px] text-center text-muted-foreground">v1.0 • Nice & Neat</p>
+      </div>
+    </>
   );
 
   // ============================================
   // RENDER: DASHBOARD
   // ============================================
   const renderDashboard = () => {
+    if (!dashboard) return null;
+    const isEmpty = dashboard.sales.month.count === 0 && dashboard.expenses.month === 0;
     return (
       <div className="space-y-5 animate-in">
+        {/* Empty state welcome */}
+        {isEmpty && (
+          <div className="bg-gradient-to-br from-amber-500 to-orange-600 rounded-2xl p-6 text-white relative overflow-hidden">
+            <div className="absolute -right-4 -bottom-4 opacity-10"><Scissors className="w-32 h-32" /></div>
+            <h3 className="text-xl font-bold">Welcome to your dashboard! 👋</h3>
+            <p className="text-sm text-amber-100 mt-1 mb-4">Start by recording your first sale or expense. Your daily, weekly, and monthly Profit &amp; Loss will appear here automatically.</p>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => setCurrentView('new-sale')} className="px-4 py-2 bg-white text-amber-600 rounded-lg text-sm font-semibold hover:bg-amber-50 transition flex items-center gap-2"><Scissors className="w-4 h-4" /> Record First Sale</button>
+              <button onClick={() => setCurrentView('expenses')} className="px-4 py-2 bg-white/20 text-white rounded-lg text-sm font-medium hover:bg-white/30 transition flex items-center gap-2"><CreditCard className="w-4 h-4" /> Add Expense</button>
+            </div>
+          </div>
+        )}
         {/* Hero: Today's Performance */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="md:col-span-2 bg-gradient-to-br from-amber-500 via-orange-500 to-red-500 dark:from-amber-700 dark:via-orange-800 dark:to-red-800 rounded-2xl p-6 text-white relative overflow-hidden">
@@ -1303,18 +1346,33 @@ export default function NiceAndNeat() {
             }} />
           </label>
           <button onClick={() => {
-            if (confirm('This will DELETE all your data and reset to defaults. This cannot be undone. Are you sure?')) {
+            if (confirm('This will DELETE all your data and reset to onboarding. This cannot be undone. Are you sure?')) {
               resetData();
               refresh();
-              setShopForm(loadData().shop);
-              showToast('Data reset to defaults', 'warning');
+              showToast('Data reset — onboarding will start fresh', 'warning');
             }
           }} className="px-4 py-2 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg text-sm flex items-center gap-2 hover:bg-red-200 dark:hover:bg-red-900/50 transition"><Trash2 className="w-4 h-4" /> Reset Data</button>
-          <button onClick={() => { refresh(); setShopForm(loadData().shop); showToast('Data refreshed!', 'success'); }} className="px-4 py-2 bg-muted text-muted-foreground rounded-lg text-sm flex items-center gap-2 hover:bg-muted/70 transition"><RefreshCw className="w-4 h-4" /> Refresh Data</button>
+          <button onClick={() => { refresh(); if (loadData().shop) setShopForm(loadData().shop as any); showToast('Data refreshed!', 'success'); }} className="px-4 py-2 bg-muted text-muted-foreground rounded-lg text-sm flex items-center gap-2 hover:bg-muted/70 transition"><RefreshCw className="w-4 h-4" /> Refresh Data</button>
         </div>
         <div className="mt-3 text-xs text-muted-foreground">
           {data.lastBackup ? `Last backup: ${new Date(data.lastBackup).toLocaleString('en-KE')}` : 'No exports yet — export your data regularly to avoid loss.'}
         </div>
+      </div>
+      <div className="bg-card border border-border rounded-2xl p-6">
+        <h3 className="font-semibold mb-4 flex items-center gap-2"><Store className="w-5 h-5 text-primary" /> Install App</h3>
+        <p className="text-sm text-muted-foreground mb-3">Install Nice & Neat on your phone or computer for quick access — it works like a native app, even offline.</p>
+        <button id="install-btn" onClick={async () => {
+          const evt = (window as any).deferredPrompt;
+          if (evt) {
+            evt.prompt();
+            await evt.userChoice;
+            (window as any).deferredPrompt = null;
+            const btn = document.getElementById('install-btn');
+            if (btn) btn.style.display = 'none';
+          } else {
+            showToast('To install: On iPhone tap Share → Add to Home Screen. On Android tap ⋮ → Install App. On desktop look for the install icon in the address bar.', 'warning');
+          }
+        }} className="px-4 py-2 btn-primary rounded-lg text-sm flex items-center gap-2"><Download className="w-4 h-4" /> Install Nice & Neat</button>
       </div>
     </div>
   );
@@ -1404,6 +1462,184 @@ export default function NiceAndNeat() {
   );
 
   // ============================================
+  // RENDER: ONBOARDING (first-run setup)
+  // ============================================
+  const renderOnboarding = () => {
+    const steps = ['Shop Info', 'Services', 'Barbers', 'Done'];
+    const canProceedShop = obShop.name.trim() && obShop.ownerName.trim();
+    const validServices = obServices.filter(s => s.name.trim() && s.price);
+    const validBarbers = obBarbers.filter(b => b.name.trim());
+
+    const finishOnboarding = () => {
+      const now = new Date().toISOString();
+      const shop: Shop = { ...obShop, createdAt: now };
+      const services: ServiceType[] = validServices.map((s, i) => ({
+        id: `svc_${Date.now()}_${i}`,
+        name: s.name, category: s.category, price: parseFloat(s.price),
+        duration: parseInt(s.duration) || 30, isActive: true, createdAt: now,
+      }));
+      const barbers: BarberType[] = validBarbers.map((b, i) => ({
+        id: `brb_${Date.now()}_${i}`,
+        name: b.name, phone: b.phone, role: b.role,
+        commissionType: b.commissionType, commissionValue: parseFloat(b.commissionValue) || 0,
+        isActive: true, createdAt: now,
+      }));
+      // Ensure at least the owner is added even if they skipped barbers
+      if (barbers.length === 0) {
+        barbers.push({ id: `brb_${Date.now()}_0`, name: obShop.ownerName, phone: obShop.phone, role: 'owner', commissionType: 'percentage', commissionValue: 100, isActive: true, createdAt: now });
+      }
+      completeOnboarding(shop, services, barbers);
+      refresh();
+      showToast('Welcome to Nice & Neat! Your shop is ready.', 'success');
+    };
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-amber-100 dark:from-amber-950 dark:via-orange-950 dark:to-amber-900 flex items-center justify-center p-4">
+        <div className="bg-card rounded-3xl shadow-2xl max-w-2xl w-full overflow-hidden">
+          {/* Header */}
+          <div className="bg-gradient-to-br from-amber-500 to-orange-600 p-8 text-white text-center">
+            <div className="w-16 h-16 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center mx-auto mb-4">
+              <Scissors className="w-8 h-8 text-white" />
+            </div>
+            <h1 className="text-3xl font-bold">Welcome to Nice & Neat</h1>
+            <p className="text-amber-100 mt-1">Let&apos;s set up your barber shop in 3 quick steps</p>
+          </div>
+
+          {/* Progress */}
+          <div className="flex items-center justify-center gap-2 py-4 border-b border-border">
+            {steps.map((step, i) => (
+              <React.Fragment key={i}>
+                <div className={`flex items-center gap-2 ${i <= onboardingStep ? 'text-primary' : 'text-muted-foreground'}`}>
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${i < onboardingStep ? 'bg-primary text-primary-foreground' : i === onboardingStep ? 'bg-primary/20 text-primary border-2 border-primary' : 'bg-muted'}`}>
+                    {i < onboardingStep ? <CheckCircle className="w-4 h-4" /> : i + 1}
+                  </div>
+                  <span className="text-xs font-medium hidden sm:inline">{step}</span>
+                </div>
+                {i < steps.length - 1 && <div className={`w-8 h-0.5 ${i < onboardingStep ? 'bg-primary' : 'bg-border'}`} />}
+              </React.Fragment>
+            ))}
+          </div>
+
+          {/* Step Content */}
+          <div className="p-6 md:p-8 max-h-[60vh] overflow-y-auto">
+            {/* STEP 0: SHOP INFO */}
+            {onboardingStep === 0 && (
+              <div className="space-y-4">
+                <div className="text-center mb-4">
+                  <h2 className="text-xl font-bold">Tell us about your shop</h2>
+                  <p className="text-sm text-muted-foreground mt-1">This information appears on your receipts and dashboard</p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="md:col-span-2"><label className="text-xs text-muted-foreground">Shop Name *</label><input type="text" value={obShop.name} onChange={e => setObShop(s => ({ ...s, name: e.target.value }))} placeholder="e.g. Nice & Neat Barber Shop" className="w-full px-3 py-2.5 mt-1 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
+                  <div className="md:col-span-2"><label className="text-xs text-muted-foreground">Tagline</label><input type="text" value={obShop.tagline} onChange={e => setObShop(s => ({ ...s, tagline: e.target.value }))} placeholder="e.g. Premium Barber Shop" className="w-full px-3 py-2.5 mt-1 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
+                  <div><label className="text-xs text-muted-foreground">Owner Name *</label><input type="text" value={obShop.ownerName} onChange={e => setObShop(s => ({ ...s, ownerName: e.target.value }))} placeholder="Your name" className="w-full px-3 py-2.5 mt-1 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
+                  <div><label className="text-xs text-muted-foreground">Phone</label><input type="tel" value={obShop.phone} onChange={e => setObShop(s => ({ ...s, phone: e.target.value }))} placeholder="254712345678" className="w-full px-3 py-2.5 mt-1 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
+                  <div className="md:col-span-2"><label className="text-xs text-muted-foreground">Address</label><input type="text" value={obShop.address} onChange={e => setObShop(s => ({ ...s, address: e.target.value }))} placeholder="Street, area, city" className="w-full px-3 py-2.5 mt-1 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
+                  <div className="md:col-span-2"><label className="text-xs text-muted-foreground">Receipt Footer</label><input type="text" value={obShop.receiptFooter} onChange={e => setObShop(s => ({ ...s, receiptFooter: e.target.value }))} className="w-full px-3 py-2.5 mt-1 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary" /></div>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 1: SERVICES */}
+            {onboardingStep === 1 && (
+              <div className="space-y-4">
+                <div className="text-center mb-4">
+                  <h2 className="text-xl font-bold">Add your services</h2>
+                  <p className="text-sm text-muted-foreground mt-1">What services do you offer? (haircuts, shaves, beard trims, etc.)</p>
+                </div>
+                {obServices.map((svc, i) => (
+                  <div key={i} className="grid grid-cols-12 gap-2 items-end p-3 bg-muted/50 rounded-lg">
+                    <div className="col-span-12 sm:col-span-5"><label className="text-xs text-muted-foreground">Service Name</label><input type="text" value={svc.name} onChange={e => { const arr = [...obServices]; arr[i] = { ...arr[i], name: e.target.value }; setObServices(arr); }} placeholder="e.g. Classic Haircut" className="w-full px-2 py-2 mt-1 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary" /></div>
+                    <div className="col-span-5 sm:col-span-3"><label className="text-xs text-muted-foreground">Category</label><select value={svc.category} onChange={e => { const arr = [...obServices]; arr[i] = { ...arr[i], category: e.target.value }; setObServices(arr); }} className="w-full px-2 py-2 mt-1 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"><option>Haircut</option><option>Shave</option><option>Beard</option><option>Kids</option><option>Style</option><option>Package</option><option>Other</option></select></div>
+                    <div className="col-span-4 sm:col-span-2"><label className="text-xs text-muted-foreground">Price (KES)</label><input type="number" value={svc.price} onChange={e => { const arr = [...obServices]; arr[i] = { ...arr[i], price: e.target.value }; setObServices(arr); }} placeholder="500" className="w-full px-2 py-2 mt-1 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary" /></div>
+                    <div className="col-span-3 sm:col-span-2"><label className="text-xs text-muted-foreground">Min</label><input type="number" value={svc.duration} onChange={e => { const arr = [...obServices]; arr[i] = { ...arr[i], duration: e.target.value }; setObServices(arr); }} placeholder="30" className="w-full px-2 py-2 mt-1 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary" /></div>
+                    {obServices.length > 1 && <div className="col-span-12 flex justify-end"><button onClick={() => setObServices(obServices.filter((_, idx) => idx !== i))} className="text-xs text-red-500 hover:text-red-700">Remove</button></div>}
+                  </div>
+                ))}
+                <button onClick={() => setObServices([...obServices, { name: '', category: 'Haircut', price: '', duration: '30' }])} className="w-full py-2 border-2 border-dashed border-border rounded-lg text-sm text-muted-foreground hover:border-primary hover:text-primary transition flex items-center justify-center gap-1"><Plus className="w-4 h-4" /> Add Another Service</button>
+                <p className="text-xs text-muted-foreground text-center">You can add more services later in the Inventory section</p>
+              </div>
+            )}
+
+            {/* STEP 2: BARBERS */}
+            {onboardingStep === 2 && (
+              <div className="space-y-4">
+                <div className="text-center mb-4">
+                  <h2 className="text-xl font-bold">Add your barbers</h2>
+                  <p className="text-sm text-muted-foreground mt-1">Who works at your shop? Include yourself as the owner.</p>
+                </div>
+                {obBarbers.map((brb, i) => (
+                  <div key={i} className="grid grid-cols-12 gap-2 items-end p-3 bg-muted/50 rounded-lg">
+                    <div className="col-span-12 sm:col-span-4"><label className="text-xs text-muted-foreground">Name</label><input type="text" value={brb.name} onChange={e => { const arr = [...obBarbers]; arr[i] = { ...arr[i], name: e.target.value }; setObBarbers(arr); }} placeholder="Barber name" className="w-full px-2 py-2 mt-1 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary" /></div>
+                    <div className="col-span-6 sm:col-span-3"><label className="text-xs text-muted-foreground">Role</label><select value={brb.role} onChange={e => { const arr = [...obBarbers]; arr[i] = { ...arr[i], role: e.target.value }; setObBarbers(arr); }} className="w-full px-2 py-2 mt-1 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"><option value="owner">Owner</option><option value="barber">Barber</option><option value="apprentice">Apprentice</option></select></div>
+                    <div className="col-span-6 sm:col-span-2"><label className="text-xs text-muted-foreground">Commission %</label><input type="number" value={brb.commissionValue} onChange={e => { const arr = [...obBarbers]; arr[i] = { ...arr[i], commissionValue: e.target.value }; setObBarbers(arr); }} placeholder="60" className="w-full px-2 py-2 mt-1 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary" /></div>
+                    <div className="col-span-10 sm:col-span-3"><label className="text-xs text-muted-foreground">Phone</label><input type="tel" value={brb.phone} onChange={e => { const arr = [...obBarbers]; arr[i] = { ...arr[i], phone: e.target.value }; setObBarbers(arr); }} placeholder="254..." className="w-full px-2 py-2 mt-1 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary" /></div>
+                    {obBarbers.length > 1 && <div className="col-span-2 flex justify-end"><button onClick={() => setObBarbers(obBarbers.filter((_, idx) => idx !== i))} className="text-xs text-red-500 hover:text-red-700"><X className="w-4 h-4" /></button></div>}
+                  </div>
+                ))}
+                <button onClick={() => setObBarbers([...obBarbers, { name: '', phone: '', role: 'barber', commissionType: 'percentage', commissionValue: '60' }])} className="w-full py-2 border-2 border-dashed border-border rounded-lg text-sm text-muted-foreground hover:border-primary hover:text-primary transition flex items-center justify-center gap-1"><Plus className="w-4 h-4" /> Add Another Barber</button>
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3 text-xs text-blue-700 dark:text-blue-400">
+                  <strong>Commission:</strong> The percentage of each sale that goes to the barber. Standard split is 60% to barber, 40% to shop. Set 100% if you&apos;re the owner.
+                </div>
+              </div>
+            )}
+
+            {/* STEP 3: DONE */}
+            {onboardingStep === 3 && (
+              <div className="text-center space-y-4 py-8">
+                <div className="w-20 h-20 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center mx-auto">
+                  <CheckCircle className="w-10 h-10 text-emerald-600 dark:text-emerald-400" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold">You&apos;re all set!</h2>
+                  <p className="text-sm text-muted-foreground mt-2 max-w-sm mx-auto">
+                    Your shop <strong>{obShop.name}</strong> is ready with {validServices.length} service{validServices.length !== 1 ? 's' : ''} and {validBarbers.length} barber{validBarbers.length !== 1 ? 's' : ''}.
+                    You can now start recording sales, tracking expenses, and viewing your Profit &amp; Loss reports.
+                  </p>
+                </div>
+                <div className="bg-muted/50 rounded-lg p-4 text-left max-w-sm mx-auto">
+                  <p className="text-xs font-semibold mb-2">What you can do now:</p>
+                  <ul className="text-xs text-muted-foreground space-y-1">
+                    <li className="flex items-center gap-2"><Scissors className="w-3 h-3 text-primary" /> Record your first sale</li>
+                    <li className="flex items-center gap-2"><CreditCard className="w-3 h-3 text-primary" /> Log expenses (rent, utilities, supplies)</li>
+                    <li className="flex items-center gap-2"><BarChart3 className="w-3 h-3 text-primary" /> View daily, weekly &amp; monthly P&amp;L</li>
+                    <li className="flex items-center gap-2"><Users className="w-3 h-3 text-primary" /> Manage walk-in queue &amp; clients</li>
+                  </ul>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Footer Buttons */}
+          <div className="p-6 border-t border-border flex items-center justify-between gap-3">
+            {onboardingStep > 0 ? (
+              <button onClick={() => setOnboardingStep(s => s - 1)} className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition">← Back</button>
+            ) : <div />}
+            <div className="flex items-center gap-2">
+              {onboardingStep < 3 && (
+                <button
+                  onClick={() => setOnboardingStep(s => s + 1)}
+                  disabled={onboardingStep === 0 && !canProceedShop}
+                  className="px-6 py-2.5 btn-primary rounded-lg text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed">
+                  {onboardingStep === 2 ? 'Review' : 'Next'} →
+                </button>
+              )}
+              {onboardingStep === 3 && (
+                <button onClick={finishOnboarding} className="px-6 py-2.5 btn-primary rounded-lg text-sm font-semibold flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4" /> Start Using Nice &amp; Neat
+                </button>
+              )}
+              {onboardingStep < 2 && (
+                <button onClick={() => setOnboardingStep(s => Math.min(s + 1, 3))} className="text-xs text-muted-foreground hover:text-foreground">Skip for now</button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ============================================
   // MAIN RENDER
   // ============================================
   if (!data) {
@@ -1419,11 +1655,16 @@ export default function NiceAndNeat() {
     );
   }
 
+  // Show onboarding flow if not yet set up
+  if (!data.isOnboarded || !data.shop) {
+    return renderOnboarding();
+  }
+
   return (
     <div className="flex min-h-screen">
       {renderSidebar()}
       {sidebarOpen && <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setSidebarOpen(false)} />}
-      <main className="flex-1 min-w-0">
+      <main className="flex-1 min-w-0 md:ml-64">
         <header className="sticky top-0 z-30 bg-background/80 backdrop-blur-md border-b border-border px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button onClick={() => setSidebarOpen(true)} className="md:hidden p-1 hover:bg-muted rounded"><Menu className="w-5 h-5" /></button>
