@@ -7,7 +7,7 @@ import {
   Trash2, X, Save, AlertCircle, Menu, Globe, TrendingUp, TrendingDown,
   DollarSign, Calendar, Download, Printer, Wallet, ArrowUp, ArrowDown,
   Zap, Phone, User, ScissorsIcon, Eye, Edit2, ChevronDown, Filter,
-  BarChart3, PieChart, Activity, Store, Award, Bell
+  BarChart3, PieChart, Activity, Store, Award, Bell, FileText, Receipt
 } from 'lucide-react';
 import { formatCurrency } from '@/lib/i18n';
 
@@ -111,8 +111,10 @@ export default function NiceAndNeat() {
   // Reports state
   const [reportPeriod, setReportPeriod] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('monthly');
   const [reportData, setReportData] = useState<any>(null);
+  const [pnlData, setPnlData] = useState<any>(null);
   const [reportFrom, setReportFrom] = useState('');
   const [reportTo, setReportTo] = useState('');
+  const [reportTab, setReportTab] = useState<'pnl' | 'trend' | 'breakdown' | 'transactions'>('pnl');
 
   // Sales/Expense search
   const [salesSearch, setSalesSearch] = useState('');
@@ -202,8 +204,12 @@ export default function NiceAndNeat() {
       const params = new URLSearchParams({ shopId, period: reportPeriod });
       if (reportFrom) params.set('from', reportFrom);
       if (reportTo) params.set('to', reportTo);
-      const r = await fetch(`/api/reports?${params}`);
+      const [r, pnl] = await Promise.all([
+        fetch(`/api/reports?${params}`),
+        fetch(`/api/profit-loss?${params}`),
+      ]);
       if (r.ok) setReportData(await r.json());
+      if (pnl.ok) setPnlData(await pnl.json());
     } catch {}
   }, [shopId, reportPeriod, reportFrom, reportTo]);
 
@@ -800,111 +806,385 @@ export default function NiceAndNeat() {
   // ============================================
   // RENDER: REPORTS
   // ============================================
-  const renderReports = () => (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <h2 className="text-xl font-bold">Reports & Analytics</h2>
-        <button onClick={async () => {
-          if (!reportData) return;
-          const csv = [['Date', 'Type', 'Description', 'Amount']];
-          reportData.sales.forEach((s: any) => csv.push([new Date(s.saleDate).toLocaleDateString(), 'Sale', s.invoiceNumber, String(s.totalAmount)]));
-          reportData.expenses.forEach((e: any) => csv.push([new Date(e.expenseDate).toLocaleDateString(), 'Expense', e.description, String(e.amount)]));
-          const blob = new Blob([csv.map(r => r.join(',')).join('\n')], { type: 'text/csv' });
-          const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `nice-neat-report-${Date.now()}.csv`; a.click();
-          showToast('Report exported!', 'success');
-        }} className="flex items-center gap-2 px-3 py-1.5 card-interactive rounded-lg text-xs border border-border"><Download className="w-3.5 h-3.5" /> Export CSV</button>
-      </div>
+  const renderReports = () => {
+    const fmtPct = (val: number) => `${val >= 0 ? '+' : ''}${val.toFixed(1)}%`;
+    const changePct = (curr: number, prev: number) => prev === 0 ? (curr > 0 ? 100 : 0) : ((curr - prev) / Math.abs(prev)) * 100;
+    const pnl = pnlData?.current;
+    const prev = pnlData?.previous;
 
-      {/* Period & Date Filters */}
-      <div className="bg-card rounded-xl border border-border p-3 flex flex-wrap items-center gap-3">
-        <div className="flex gap-1 bg-muted rounded-lg p-1">
-          {(['daily', 'weekly', 'monthly', 'yearly'] as const).map(p => (
-            <button key={p} onClick={() => { setReportPeriod(p); setReportFrom(''); setReportTo(''); }} className={`px-3 py-1.5 text-xs rounded-md font-medium capitalize transition ${reportPeriod === p && !reportFrom ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground'}`}>{p}</button>
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <h2 className="text-xl font-bold">Profit & Loss Statement</h2>
+            <p className="text-xs text-muted-foreground">Daily, weekly, monthly & yearly financial reports</p>
+          </div>
+          <button onClick={async () => {
+            if (!pnl) return;
+            // Export full P&L as CSV
+            const csv: string[][] = [['Nice & Neat — Profit & Loss Statement']];
+            csv.push(['Period', `${pnlData.range.from.split('T')[0]} to ${pnlData.range.to.split('T')[0]}`]);
+            csv.push([]);
+            csv.push(['REVENUE']);
+            csv.push(['Service Revenue', String(pnl.revenue.services)]);
+            csv.push(['Retail Product Revenue', String(pnl.revenue.retail)]);
+            csv.push(['Tips', String(pnl.revenue.tips)]);
+            csv.push(['Total Revenue', String(pnl.revenue.total)]);
+            csv.push([]);
+            csv.push(['Cost of Goods Sold', String(pnl.cogs)]);
+            csv.push(['Gross Profit', String(pnl.grossProfit)]);
+            csv.push([]);
+            csv.push(['OPERATING EXPENSES']);
+            Object.entries(pnl.operatingExpenses.byCategory).forEach(([cat, amt]: [string, any]) => { if (amt > 0) csv.push([cat, String(amt)]); });
+            csv.push(['Total Operating Expenses', String(pnl.operatingExpenses.total)]);
+            csv.push([]);
+            csv.push(['Barber Commissions', String(pnl.commissions.total)]);
+            csv.push([]);
+            csv.push(['NET PROFIT', String(pnl.netProfit)]);
+            csv.push(['Profit Margin %', String(pnl.profitMargin) + '%']);
+            // Also export transactions
+            csv.push([]);
+            csv.push(['TRANSACTIONS']);
+            csv.push(['Date', 'Type', 'Description', 'Amount']);
+            pnlData.sales.forEach((s: any) => csv.push([new Date(s.saleDate).toLocaleDateString(), 'Sale', s.invoiceNumber, String(s.totalAmount)]));
+            pnlData.expenses.forEach((e: any) => csv.push([new Date(e.expenseDate).toLocaleDateString(), 'Expense', e.description, String(e.amount)]));
+            const blob = new Blob([csv.map(r => r.map(c => `"${c}"`).join(',')).join('\n')], { type: 'text/csv' });
+            const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `nice-neat-pnl-${pnlData.range.from.split('T')[0]}-to-${pnlData.range.to.split('T')[0]}.csv`; a.click();
+            showToast('P&L statement exported!', 'success');
+          }} className="flex items-center gap-2 px-3 py-1.5 card-interactive rounded-lg text-xs border border-border"><Download className="w-3.5 h-3.5" /> Export P&L (CSV)</button>
+        </div>
+
+        {/* Period & Date Filters */}
+        <div className="bg-card rounded-xl border border-border p-3 flex flex-wrap items-center gap-3">
+          <div className="flex gap-1 bg-muted rounded-lg p-1">
+            {(['daily', 'weekly', 'monthly', 'yearly'] as const).map(p => (
+              <button key={p} onClick={() => { setReportPeriod(p); setReportFrom(''); setReportTo(''); setTimeout(fetchReports, 50); }} className={`px-4 py-1.5 text-xs rounded-md font-medium capitalize transition ${reportPeriod === p && !reportFrom ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground'}`}>{p}</button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1">
+            <input type="date" value={reportFrom} onChange={e => setReportFrom(e.target.value)} className="px-2 py-1.5 text-xs bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary" />
+            <span className="text-xs text-muted-foreground">to</span>
+            <input type="date" value={reportTo} onChange={e => setReportTo(e.target.value)} className="px-2 py-1.5 text-xs bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary" />
+          </div>
+          <button onClick={fetchReports} className="px-3 py-1.5 text-xs btn-primary rounded-lg">Generate Report</button>
+          {pnlData?.range && <span className="text-xs text-muted-foreground ml-auto">{pnlData.range.from.split('T')[0]} → {pnlData.range.to.split('T')[0]} {prev && <span className="text-muted-foreground/70">(vs {pnlData.previousRange.from.split('T')[0]} → {pnlData.previousRange.to.split('T')[0]})</span>}</span>}
+        </div>
+
+        {/* Tab Switcher */}
+        <div className="flex gap-1 border-b border-border">
+          {[
+            { key: 'pnl' as const, label: 'P&L Statement', icon: <FileText className="w-3.5 h-3.5" /> },
+            { key: 'trend' as const, label: 'Trend Chart', icon: <TrendingUp className="w-3.5 h-3.5" /> },
+            { key: 'breakdown' as const, label: 'Breakdowns', icon: <PieChart className="w-3.5 h-3.5" /> },
+            { key: 'transactions' as const, label: 'Transactions', icon: <Receipt className="w-3.5 h-3.5" /> },
+          ].map(tab => (
+            <button key={tab.key} onClick={() => setReportTab(tab.key)} className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition ${reportTab === tab.key ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
+              {tab.icon} {tab.label}
+            </button>
           ))}
         </div>
-        <div className="flex items-center gap-1">
-          <input type="date" value={reportFrom} onChange={e => setReportFrom(e.target.value)} className="px-2 py-1.5 text-xs bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary" />
-          <span className="text-xs text-muted-foreground">to</span>
-          <input type="date" value={reportTo} onChange={e => setReportTo(e.target.value)} className="px-2 py-1.5 text-xs bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary" />
-        </div>
-        <button onClick={fetchReports} className="px-3 py-1.5 text-xs btn-primary rounded-lg">Generate</button>
-      </div>
 
-      {!reportData ? <div className="text-center py-12 text-muted-foreground"><BarChart3 className="w-12 h-12 mx-auto mb-3 opacity-50" /><p>Select a period and click Generate</p></div> : (
-        <>
-          {/* Summary Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="card-stat rounded-xl p-4"><p className="text-label">Total Sales</p><p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(reportData.summary.totalSales)}</p><p className="text-xs text-muted-foreground">{reportData.summary.salesCount} sales</p></div>
-            <div className="card-stat rounded-xl p-4"><p className="text-label">Total Expenses</p><p className="text-2xl font-bold text-red-600 dark:text-red-400">{formatCurrency(reportData.summary.totalExpenses)}</p><p className="text-xs text-muted-foreground">{reportData.summary.expenseCount} items</p></div>
-            <div className="card-stat rounded-xl p-4"><p className="text-label">Net Profit</p><p className={`text-2xl font-bold ${reportData.summary.netProfit >= 0 ? 'text-primary' : 'text-red-600 dark:text-red-400'}`}>{formatCurrency(reportData.summary.netProfit)}</p><p className="text-xs text-muted-foreground">{reportData.summary.profitMargin}% margin</p></div>
-            <div className="card-stat rounded-xl p-4"><p className="text-label">Avg Sale Value</p><p className="text-2xl font-bold">{formatCurrency(reportData.summary.avgSaleValue)}</p><p className="text-xs text-muted-foreground">Per transaction</p></div>
-          </div>
+        {!pnl ? (
+          <div className="text-center py-12 text-muted-foreground"><BarChart3 className="w-12 h-12 mx-auto mb-3 opacity-50" /><p>Loading P&L data...</p></div>
+        ) : (
+          <>
+            {/* === KEY METRIC CARDS === */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="card-stat rounded-xl p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-label">Total Revenue</p>
+                  {prev && (() => { const chg = changePct(pnl.totalRevenue, prev.totalRevenue); return <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${chg >= 0 ? 'metric-up' : 'metric-down'} flex items-center gap-0.5`}>{chg >= 0 ? <ArrowUp className="w-2.5 h-2.5" /> : <ArrowDown className="w-2.5 h-2.5" />}{Math.abs(chg).toFixed(0)}%</span>; })()}
+                </div>
+                <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(pnl.totalRevenue)}</p>
+                <p className="text-xs text-muted-foreground">{pnl.salesCount} sales • Avg {formatCurrency(pnl.avgSaleValue)}</p>
+              </div>
+              <div className="card-stat rounded-xl p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-label">Total Expenses</p>
+                  {prev && (() => { const chg = changePct(pnl.totalExpenses, prev.totalExpenses); return <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${chg <= 0 ? 'metric-up' : 'metric-down'} flex items-center gap-0.5`}>{chg <= 0 ? <ArrowDown className="w-2.5 h-2.5" /> : <ArrowUp className="w-2.5 h-2.5" />}{Math.abs(chg).toFixed(0)}%</span>; })()}
+                </div>
+                <p className="text-2xl font-bold text-red-600 dark:text-red-400">{formatCurrency(pnl.totalExpenses)}</p>
+                <p className="text-xs text-muted-foreground">OpEx {formatCurrency(pnl.operatingExpenses.total)} + Comm {formatCurrency(pnl.commissions.total)}</p>
+              </div>
+              <div className="card-stat rounded-xl p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-label">Net Profit</p>
+                  {prev && (() => { const chg = changePct(pnl.netProfit, prev.netProfit); return <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${chg >= 0 ? 'metric-up' : 'metric-down'} flex items-center gap-0.5`}>{chg >= 0 ? <ArrowUp className="w-2.5 h-2.5" /> : <ArrowDown className="w-2.5 h-2.5" />}{Math.abs(chg).toFixed(0)}%</span>; })()}
+                </div>
+                <p className={`text-2xl font-bold ${pnl.netProfit >= 0 ? 'text-primary' : 'text-red-600 dark:text-red-400'}`}>{formatCurrency(pnl.netProfit)}</p>
+                <p className="text-xs text-muted-foreground">{pnl.profitMargin}% margin</p>
+              </div>
+              <div className="card-stat rounded-xl p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-label">Gross Profit</p>
+                  {prev && (() => { const chg = changePct(pnl.grossProfit, prev.grossProfit); return <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${chg >= 0 ? 'metric-up' : 'metric-down'} flex items-center gap-0.5`}>{chg >= 0 ? <ArrowUp className="w-2.5 h-2.5" /> : <ArrowDown className="w-2.5 h-2.5" />}{Math.abs(chg).toFixed(0)}%</span>; })()}
+                </div>
+                <p className="text-2xl font-bold">{formatCurrency(pnl.grossProfit)}</p>
+                <p className="text-xs text-muted-foreground">{pnl.grossMargin}% gross margin</p>
+              </div>
+            </div>
 
-          {/* Trend Chart */}
-          {reportData.trend.length > 0 && (
-            <div className="bg-card rounded-2xl border border-border p-5">
-              <h3 className="font-bold text-sm mb-3">Sales vs Expenses Trend</h3>
-              <div className="flex items-end gap-2 h-40">
-                {reportData.trend.map((day: any, i: number) => {
-                  const maxVal = Math.max(...reportData.trend.map((d: any) => Math.max(d.sales, d.expenses)), 1);
-                  return (
-                    <div key={i} className="flex-1 flex flex-col items-center gap-1 group">
-                      <div className="w-full flex items-end gap-0.5 h-32">
-                        <div className="flex-1 bg-primary rounded-t-sm transition-all group-hover:opacity-80" style={{ height: `${Math.max((day.sales / maxVal) * 100, 2)}%` }} title={`Sales: ${formatCurrency(day.sales)}`} />
-                        <div className="flex-1 bg-red-400 dark:bg-red-600 rounded-t-sm transition-all group-hover:opacity-80" style={{ height: `${Math.max((day.expenses / maxVal) * 100, 2)}%` }} title={`Expenses: ${formatCurrency(day.expenses)}`} />
+            {/* === P&L STATEMENT TAB === */}
+            {reportTab === 'pnl' && (
+              <div className="bg-card rounded-2xl border border-border overflow-hidden">
+                <div className="p-4 border-b border-border bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/10 dark:to-orange-900/10">
+                  <h3 className="font-bold flex items-center gap-2"><FileText className="w-4 h-4 text-primary" /> Profit & Loss Statement</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">For the period {pnlData.range.from.split('T')[0]} to {pnlData.range.to.split('T')[0]}</p>
+                </div>
+                <div className="divide-y divide-border">
+                  {/* REVENUE SECTION */}
+                  <div className="p-4">
+                    <p className="text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 mb-3">Revenue</p>
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center py-1.5">
+                        <span className="text-sm text-muted-foreground">Service Revenue (haircuts, shaves, etc.)</span>
+                        <span className="text-sm font-semibold text-emerald-600 dark:text-emerald-400">{formatCurrency(pnl.revenue.services)}</span>
                       </div>
-                      <span className="text-[10px] text-muted-foreground truncate">{day.date}</span>
+                      <div className="flex justify-between items-center py-1.5">
+                        <span className="text-sm text-muted-foreground">Retail Product Sales (pomade, beard oil, etc.)</span>
+                        <span className="text-sm font-semibold text-emerald-600 dark:text-emerald-400">{formatCurrency(pnl.revenue.retail)}</span>
+                      </div>
+                      <div className="flex justify-between items-center py-1.5">
+                        <span className="text-sm text-muted-foreground">Tips</span>
+                        <span className="text-sm font-semibold text-emerald-600 dark:text-emerald-400">{formatCurrency(pnl.revenue.tips)}</span>
+                      </div>
+                      {pnl.revenue.discounts > 0 && (
+                        <div className="flex justify-between items-center py-1.5">
+                          <span className="text-sm text-muted-foreground">Less: Discounts Given</span>
+                          <span className="text-sm font-semibold text-red-600 dark:text-red-400">({formatCurrency(pnl.revenue.discounts)})</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between items-center py-2 border-t border-border mt-2 bg-emerald-50/50 dark:bg-emerald-900/10 rounded-lg px-2">
+                        <span className="text-sm font-bold">Total Revenue</span>
+                        <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(pnl.revenue.total)}</span>
+                      </div>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Breakdowns */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-card rounded-2xl border border-border p-5">
-              <h3 className="font-bold text-sm mb-3">Service Breakdown</h3>
-              <div className="space-y-2">
-                {reportData.serviceBreakdown.map((s: any, i: number) => (
-                  <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
-                    <span className="text-sm font-medium">{s.name}</span>
-                    <div className="text-right"><span className="text-sm font-bold">{formatCurrency(s.revenue)}</span><span className="text-xs text-muted-foreground ml-2">{s.count}x</span></div>
                   </div>
-                ))}
-              </div>
-            </div>
-            <div className="bg-card rounded-2xl border border-border p-5">
-              <h3 className="font-bold text-sm mb-3">Expense Breakdown</h3>
-              <div className="space-y-2">
-                {reportData.expenseBreakdown.map((e: any, i: number) => (
-                  <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
-                    <span className="text-sm font-medium capitalize">{e.category}</span>
-                    <span className="text-sm font-bold text-red-600 dark:text-red-400">{formatCurrency(e.amount)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
 
-          {/* Barber Performance */}
-          <div className="bg-card rounded-2xl border border-border p-5">
-            <h3 className="font-bold text-sm mb-3">Barber Performance</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50"><tr><th className="px-4 py-2 text-left text-xs text-muted-foreground">Barber</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Sales</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Revenue</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Commission Due</th></tr></thead>
-                <tbody>
-                  {reportData.barberBreakdown.map((b: any, i: number) => (
-                    <tr key={i} className="border-t border-border"><td className="px-4 py-2.5 font-medium">{b.name}</td><td className="px-4 py-2.5 text-right">{b.sales}</td><td className="px-4 py-2.5 text-right font-bold">{formatCurrency(b.revenue)}</td><td className="px-4 py-2.5 text-right text-amber-600 dark:text-amber-400 font-medium">{formatCurrency(b.commission)}</td></tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-    </div>
-  );
+                  {/* COGS SECTION */}
+                  <div className="p-4">
+                    <p className="text-xs font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400 mb-3">Cost of Goods Sold</p>
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center py-1.5">
+                        <span className="text-sm text-muted-foreground">Cost of Retail Products Sold</span>
+                        <span className="text-sm font-semibold text-red-600 dark:text-red-400">{formatCurrency(pnl.cogs)}</span>
+                      </div>
+                      <div className="flex justify-between items-center py-2 border-t border-border mt-2 bg-amber-50/50 dark:bg-amber-900/10 rounded-lg px-2">
+                        <span className="text-sm font-bold">Gross Profit</span>
+                        <span className="text-sm font-bold">{formatCurrency(pnl.grossProfit)}</span>
+                      </div>
+                      <div className="flex justify-between items-center py-1">
+                        <span className="text-xs text-muted-foreground">Gross Margin</span>
+                        <span className="text-xs font-semibold">{pnl.grossMargin}%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* OPERATING EXPENSES SECTION */}
+                  <div className="p-4">
+                    <p className="text-xs font-bold uppercase tracking-wider text-red-600 dark:text-red-400 mb-3">Operating Expenses</p>
+                    <div className="space-y-2">
+                      {Object.entries(pnl.operatingExpenses.byCategory)
+                        .filter(([_, amt]: [string, any]) => amt > 0)
+                        .sort((a: any, b: any) => b[1] - a[1])
+                        .map(([cat, amt]: [string, any]) => (
+                          <div key={cat} className="flex justify-between items-center py-1.5">
+                            <span className="text-sm text-muted-foreground capitalize">{cat === 'misc' ? 'Miscellaneous' : cat}</span>
+                            <span className="text-sm font-semibold text-red-600 dark:text-red-400">({formatCurrency(amt)})</span>
+                          </div>
+                        ))}
+                      <div className="flex justify-between items-center py-2 border-t border-border mt-2 bg-red-50/50 dark:bg-red-900/10 rounded-lg px-2">
+                        <span className="text-sm font-bold">Total Operating Expenses</span>
+                        <span className="text-sm font-bold text-red-600 dark:text-red-400">({formatCurrency(pnl.operatingExpenses.total)})</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* BARBER COMMISSIONS SECTION */}
+                  {pnl.commissions.total > 0 && (
+                    <div className="p-4">
+                      <p className="text-xs font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400 mb-3">Barber Commissions (Labor Cost)</p>
+                      <div className="space-y-2">
+                        {pnl.commissions.byBarber.map((b: any, i: number) => (
+                          <div key={i} className="flex justify-between items-center py-1.5">
+                            <span className="text-sm text-muted-foreground">{b.name} <span className="text-xs">({b.sales} cuts)</span></span>
+                            <span className="text-sm font-semibold text-red-600 dark:text-red-400">({formatCurrency(b.commission)})</span>
+                          </div>
+                        ))}
+                        <div className="flex justify-between items-center py-2 border-t border-border mt-2 bg-purple-50/50 dark:bg-purple-900/10 rounded-lg px-2">
+                          <span className="text-sm font-bold">Total Commissions</span>
+                          <span className="text-sm font-bold text-red-600 dark:text-red-400">({formatCurrency(pnl.commissions.total)})</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* NET PROFIT SECTION */}
+                  <div className={`p-4 ${pnl.netProfit >= 0 ? 'bg-emerald-50 dark:bg-emerald-900/20' : 'bg-red-50 dark:bg-red-900/20'}`}>
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="text-lg font-bold">NET PROFIT</p>
+                        <p className="text-xs text-muted-foreground">Profit Margin: {pnl.profitMargin}%</p>
+                      </div>
+                      <p className={`text-3xl font-bold ${pnl.netProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>{formatCurrency(pnl.netProfit)}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* === TREND CHART TAB === */}
+            {reportTab === 'trend' && pnlData.dailyBreakdown && pnlData.dailyBreakdown.length > 0 && (
+              <div className="bg-card rounded-2xl border border-border p-5">
+                <h3 className="font-bold text-sm mb-3 flex items-center gap-2"><TrendingUp className="w-4 h-4 text-primary" /> Revenue vs Expenses vs Profit Trend</h3>
+                <div className="flex items-end gap-2 h-48">
+                  {pnlData.dailyBreakdown.map((day: any, i: number) => {
+                    const maxVal = Math.max(...pnlData.dailyBreakdown.map((d: any) => Math.max(d.totalRevenue, d.expenses, Math.abs(d.netProfit))), 1);
+                    return (
+                      <div key={i} className="flex-1 flex flex-col items-center gap-1 group">
+                        <div className="w-full flex items-end gap-0.5 h-40 relative">
+                          <div className="flex-1 bg-emerald-500 rounded-t-sm transition-all group-hover:opacity-80" style={{ height: `${Math.max((day.totalRevenue / maxVal) * 100, 2)}%` }} title={`Revenue: ${formatCurrency(day.totalRevenue)}`} />
+                          <div className="flex-1 bg-red-400 dark:bg-red-600 rounded-t-sm transition-all group-hover:opacity-80" style={{ height: `${Math.max((day.expenses / maxVal) * 100, 2)}%` }} title={`Expenses: ${formatCurrency(day.expenses)}`} />
+                          <div className={`flex-1 rounded-t-sm transition-all group-hover:opacity-80 ${day.netProfit >= 0 ? 'bg-primary' : 'bg-red-600'}`} style={{ height: `${Math.max((Math.abs(day.netProfit) / maxVal) * 100, 2)}%` }} title={`Profit: ${formatCurrency(day.netProfit)}`} />
+                        </div>
+                        <span className="text-[10px] text-muted-foreground truncate">{day.displayDate}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center gap-4 mt-3 text-xs">
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-500 rounded-sm" /> Revenue</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-red-400 dark:bg-red-600 rounded-sm" /> Expenses</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-primary rounded-sm" /> Profit</span>
+                </div>
+                {/* Daily breakdown table */}
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-muted/50">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-muted-foreground">Date</th>
+                        <th className="px-3 py-2 text-right text-muted-foreground">Revenue</th>
+                        <th className="px-3 py-2 text-right text-muted-foreground">Expenses</th>
+                        <th className="px-3 py-2 text-right text-muted-foreground">Profit</th>
+                        <th className="px-3 py-2 text-right text-muted-foreground">Sales</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pnlData.dailyBreakdown.slice().reverse().map((day: any, i: number) => (
+                        <tr key={i} className="border-t border-border hover:bg-muted/30">
+                          <td className="px-3 py-2 font-medium">{day.displayDate}</td>
+                          <td className="px-3 py-2 text-right text-emerald-600 dark:text-emerald-400">{formatCurrency(day.totalRevenue)}</td>
+                          <td className="px-3 py-2 text-right text-red-600 dark:text-red-400">{formatCurrency(day.expenses)}</td>
+                          <td className={`px-3 py-2 text-right font-bold ${day.netProfit >= 0 ? 'text-primary' : 'text-red-600 dark:text-red-400'}`}>{formatCurrency(day.netProfit)}</td>
+                          <td className="px-3 py-2 text-right text-muted-foreground">{day.salesCount}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* === BREAKDOWNS TAB === */}
+            {reportTab === 'breakdown' && reportData && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-card rounded-2xl border border-border p-5">
+                  <h3 className="font-bold text-sm mb-3 flex items-center gap-2"><Scissors className="w-4 h-4 text-primary" /> Service Breakdown</h3>
+                  <div className="space-y-2">
+                    {reportData.serviceBreakdown.map((s: any, i: number) => (
+                      <div key={i} className="p-2 rounded-lg bg-muted/50">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">{s.name}</span>
+                          <span className="text-sm font-bold">{formatCurrency(s.revenue)}</span>
+                        </div>
+                        <div className="flex items-center justify-between mt-1">
+                          <span className="text-xs text-muted-foreground">{s.count} times</span>
+                          <span className="text-xs text-muted-foreground">{formatCurrency(s.revenue / s.count)} avg</span>
+                        </div>
+                        <div className="w-full bg-background rounded-full h-1.5 mt-2">
+                          <div className="bg-primary h-1.5 rounded-full" style={{ width: `${(s.revenue / reportData.serviceBreakdown[0].revenue) * 100}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="bg-card rounded-2xl border border-border p-5">
+                  <h3 className="font-bold text-sm mb-3 flex items-center gap-2"><CreditCard className="w-4 h-4 text-primary" /> Expense Breakdown</h3>
+                  <div className="space-y-2">
+                    {reportData.expenseBreakdown.map((e: any, i: number) => {
+                      const totalExp = reportData.expenseBreakdown.reduce((s: number, x: any) => s + x.amount, 0);
+                      const pct = totalExp > 0 ? (e.amount / totalExp) * 100 : 0;
+                      return (
+                        <div key={i} className="p-2 rounded-lg bg-muted/50">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium capitalize">{e.category}</span>
+                            <span className="text-sm font-bold text-red-600 dark:text-red-400">{formatCurrency(e.amount)}</span>
+                          </div>
+                          <div className="flex items-center justify-between mt-1">
+                            <span className="text-xs text-muted-foreground">{pct.toFixed(0)}% of total</span>
+                          </div>
+                          <div className="w-full bg-background rounded-full h-1.5 mt-2">
+                            <div className="bg-red-400 dark:bg-red-600 h-1.5 rounded-full" style={{ width: `${pct}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="bg-card rounded-2xl border border-border p-5 md:col-span-2">
+                  <h3 className="font-bold text-sm mb-3 flex items-center gap-2"><User className="w-4 h-4 text-primary" /> Barber Performance & Commissions</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/50"><tr><th className="px-4 py-2 text-left text-xs text-muted-foreground">Barber</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Sales</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Revenue</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Commission Due</th><th className="px-4 py-2 text-right text-xs text-muted-foreground">Avg Sale</th></tr></thead>
+                      <tbody>
+                        {reportData.barberBreakdown.map((b: any, i: number) => (
+                          <tr key={i} className="border-t border-border hover:bg-muted/30"><td className="px-4 py-2.5 font-medium">{b.name}</td><td className="px-4 py-2.5 text-right">{b.sales}</td><td className="px-4 py-2.5 text-right font-bold">{formatCurrency(b.revenue)}</td><td className="px-4 py-2.5 text-right text-amber-600 dark:text-amber-400 font-medium">{formatCurrency(b.commission)}</td><td className="px-4 py-2.5 text-right text-muted-foreground">{formatCurrency(b.revenue / b.sales)}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* === TRANSACTIONS TAB === */}
+            {reportTab === 'transactions' && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="bg-card rounded-2xl border border-border p-4">
+                    <h3 className="font-bold text-sm mb-3 text-emerald-600 dark:text-emerald-400">Sales ({pnlData.sales.length})</h3>
+                    <div className="space-y-1.5 max-h-96 overflow-y-auto">
+                      {pnlData.sales.length === 0 ? <p className="text-xs text-muted-foreground text-center py-4">No sales in this period</p> :
+                        pnlData.sales.map((s: any) => (
+                          <div key={s.id} className="flex items-center justify-between p-2 rounded-lg bg-muted/30 hover:bg-muted/60 transition">
+                            <div><p className="text-xs font-mono">{s.invoiceNumber}</p><p className="text-xs text-muted-foreground">{new Date(s.saleDate).toLocaleDateString('en-KE')} • {s.barber?.name || '—'}</p></div>
+                            <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(s.totalAmount)}</span>
+                          </div>
+                        ))
+                      }
+                    </div>
+                  </div>
+                  <div className="bg-card rounded-2xl border border-border p-4">
+                    <h3 className="font-bold text-sm mb-3 text-red-600 dark:text-red-400">Expenses ({pnlData.expenses.length})</h3>
+                    <div className="space-y-1.5 max-h-96 overflow-y-auto">
+                      {pnlData.expenses.length === 0 ? <p className="text-xs text-muted-foreground text-center py-4">No expenses in this period</p> :
+                        pnlData.expenses.map((e: any) => (
+                          <div key={e.id} className="flex items-center justify-between p-2 rounded-lg bg-muted/30 hover:bg-muted/60 transition">
+                            <div><p className="text-xs font-medium">{e.description}</p><p className="text-xs text-muted-foreground">{new Date(e.expenseDate).toLocaleDateString('en-KE')} • <span className="capitalize">{e.category}</span></p></div>
+                            <span className="text-sm font-bold text-red-600 dark:text-red-400">({formatCurrency(e.amount)})</span>
+                          </div>
+                        ))
+                      }
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
 
   // ============================================
   // RENDER: INVENTORY
