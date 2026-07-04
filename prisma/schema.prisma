@@ -37,6 +37,7 @@ model Shop {
   sales       Sale[]
   expenses    Expense[]
   suppliers   Supplier[]
+  walkInQueue WalkInQueue[]
 }
 
 // ============================================
@@ -143,7 +144,8 @@ model Sale {
   subtotal      Float                     // Before tax
   taxAmount     Float    @default(0)
   discountAmount Float   @default(0)
-  totalAmount   Float                     // Final amount paid
+  tipAmount     Float    @default(0)      // Tips (separate for tax tracking)
+  totalAmount   Float                     // Final amount paid (subtotal - discount + tip)
   paymentMethod String   @default("cash") // cash | mpesa | card
   mpesaRef      String?                   // M-Pesa transaction code
   status        String   @default("completed") // completed | refunded
@@ -221,4 +223,29 @@ model Supplier {
   shop          Shop     @relation(fields: [shopId], references: [id])
 
   @@index([shopId])
+}
+
+// ============================================
+// WALK-IN QUEUE (Critical — most barbershops are walk-in dominant)
+// ============================================
+
+model WalkInQueue {
+  id            String   @id @default(cuid())
+  shopId        String
+  clientName    String                     // Walk-in name (or "Walk-in #3")
+  clientPhone   String?                    // Optional phone for notifications
+  partySize     Int      @default(1)       // Number of people in party
+  preferredBarberId String?                // Requested barber (optional)
+  status        String   @default("waiting") // waiting | seated | no_show | cancelled
+  checkInTime   DateTime @default(now())   // When they joined the queue
+  seatedTime    DateTime?                  // When they were seated
+  waitMinutes   Int?                       // Calculated wait time
+  notes         String?                    // e.g. "Wants skin fade", "First time"
+  position      Int      @default(0)       // Queue position
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  shop          Shop     @relation(fields: [shopId], references: [id])
+
+  @@index([shopId, status])
 }

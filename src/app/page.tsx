@@ -14,7 +14,7 @@ import { formatCurrency } from '@/lib/i18n';
 // ============================================
 // TYPES
 // ============================================
-type View = 'dashboard' | 'new-sale' | 'clients' | 'expenses' | 'reports' | 'inventory' | 'barbers' | 'settings';
+type View = 'dashboard' | 'new-sale' | 'queue' | 'clients' | 'expenses' | 'reports' | 'inventory' | 'barbers' | 'settings';
 
 interface Service { id: string; name: string; category: string; price: number; duration: number; isActive: boolean; }
 interface Product { id: string; name: string; category: string; price: number; costPrice: number; quantity: number; reorderLevel: number; unit: string; isActive: boolean; }
@@ -93,10 +93,16 @@ export default function NiceAndNeat() {
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [mpesaRef, setMpesaRef] = useState('');
   const [discountAmount, setDiscountAmount] = useState('');
+  const [tipAmount, setTipAmount] = useState('');
   const [saleNotes, setSaleNotes] = useState('');
   const [saleTab, setSaleTab] = useState<'services' | 'products'>('services');
   const [clientSearch, setClientSearch] = useState('');
   const [showClientSelect, setShowClientSelect] = useState(false);
+
+  // Queue state
+  const [queueData, setQueueData] = useState<any>(null);
+  const [newQueueEntry, setNewQueueEntry] = useState({ clientName: '', clientPhone: '', partySize: '1', preferredBarberId: '', notes: '' });
+  const [showAddQueue, setShowAddQueue] = useState(false);
 
   // Expenses state
   const [newExpense, setNewExpense] = useState({ category: 'supplies', description: '', amount: '', paymentMethod: 'cash', vendor: '', expenseDate: '' });
@@ -185,6 +191,11 @@ export default function NiceAndNeat() {
     } catch {}
   }, [shopId, salesSearch]);
 
+  const fetchQueue = useCallback(async () => {
+    if (!shopId) return;
+    try { const r = await fetch(`/api/queue?shopId=${shopId}`); if (r.ok) setQueueData(await r.json()); } catch {}
+  }, [shopId]);
+
   const fetchReports = useCallback(async () => {
     if (!shopId) return;
     try {
@@ -202,6 +213,7 @@ export default function NiceAndNeat() {
     const fetchers: Record<View, () => void> = {
       dashboard: fetchDashboard,
       'new-sale': async () => { await fetchServices(); await fetchProducts(); await fetchBarbers(); },
+      queue: fetchQueue,
       clients: () => fetchClients(),
       expenses: fetchExpenses,
       reports: fetchReports,
@@ -210,7 +222,7 @@ export default function NiceAndNeat() {
       settings: () => {},
     };
     fetchers[currentView]?.();
-  }, [currentView, shopId, fetchDashboard, fetchServices, fetchProducts, fetchBarbers, fetchClients, fetchExpenses, fetchReports]);
+  }, [currentView, shopId, fetchDashboard, fetchServices, fetchProducts, fetchBarbers, fetchClients, fetchExpenses, fetchReports, fetchQueue]);
 
   // === CART LOGIC ===
   const addToCart = (item: Service | Product, itemType: 'service' | 'product') => {
@@ -229,7 +241,8 @@ export default function NiceAndNeat() {
   const updateCartQty = (idx: number, qty: number) => { if (qty <= 0) { removeFromCart(idx); return; } setCart(prev => prev.map((c, i) => i === idx ? { ...c, quantity: qty } : c)); };
   const cartSubtotal = cart.reduce((s, c) => s + c.price * c.quantity, 0);
   const cartDiscount = parseFloat(discountAmount) || 0;
-  const cartTotal = cartSubtotal - cartDiscount;
+  const cartTip = parseFloat(tipAmount) || 0;
+  const cartTotal = cartSubtotal - cartDiscount + cartTip;
 
   // === CREATE SALE ===
   const createSale = async () => {
@@ -237,11 +250,11 @@ export default function NiceAndNeat() {
     try {
       const res = await fetch('/api/sales', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shopId, items: cart, clientId: selectedClient?.id, barberId: selectedBarber?.id, paymentMethod, mpesaRef, discountAmount: cartDiscount, notes: saleNotes }),
+        body: JSON.stringify({ shopId, items: cart, clientId: selectedClient?.id, barberId: selectedBarber?.id, paymentMethod, mpesaRef, discountAmount: cartDiscount, tipAmount: cartTip, notes: saleNotes }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      setCart([]); setSelectedClient(null); setSelectedBarber(null); setPaymentMethod('cash'); setMpesaRef(''); setDiscountAmount(''); setSaleNotes('');
+      setCart([]); setSelectedClient(null); setSelectedBarber(null); setPaymentMethod('cash'); setMpesaRef(''); setDiscountAmount(''); setTipAmount(''); setSaleNotes('');
       showToast(`Sale ${data.invoiceNumber} recorded!`, 'success');
       fetchDashboard();
     } catch (err: any) { showToast(err.message, 'error'); }
@@ -249,7 +262,7 @@ export default function NiceAndNeat() {
 
   // === NAV ITEMS ===
   const navGroups = [
-    { label: 'MAIN', items: [{ view: 'dashboard' as View, icon: <LayoutDashboard className="w-5 h-5" />, label: 'Dashboard' }, { view: 'new-sale' as View, icon: <Scissors className="w-5 h-5" />, label: 'New Sale' }] },
+    { label: 'MAIN', items: [{ view: 'dashboard' as View, icon: <LayoutDashboard className="w-5 h-5" />, label: 'Dashboard' }, { view: 'new-sale' as View, icon: <Scissors className="w-5 h-5" />, label: 'New Sale' }, { view: 'queue' as View, icon: <Users className="w-5 h-5" />, label: 'Walk-In Queue' }] },
     { label: 'MANAGE', items: [{ view: 'clients' as View, icon: <Users className="w-5 h-5" />, label: 'Clients' }, { view: 'barbers' as View, icon: <User className="w-5 h-5" />, label: 'Barbers' }, { view: 'inventory' as View, icon: <Package className="w-5 h-5" />, label: 'Inventory' }] },
     { label: 'FINANCE', items: [{ view: 'expenses' as View, icon: <CreditCard className="w-5 h-5" />, label: 'Expenses' }, { view: 'reports' as View, icon: <BarChart3 className="w-5 h-5" />, label: 'Reports' }] },
     { label: 'SYSTEM', items: [{ view: 'settings' as View, icon: <Settings className="w-5 h-5" />, label: 'Settings' }] },
@@ -544,6 +557,7 @@ export default function NiceAndNeat() {
             <div className="space-y-1 text-sm">
               <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{formatCurrency(cartSubtotal)}</span></div>
               <div className="flex justify-between items-center"><span className="text-muted-foreground">Discount</span><input type="number" value={discountAmount} onChange={e => setDiscountAmount(e.target.value)} placeholder="0" className="w-20 px-2 py-1 text-right text-sm bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary" /></div>
+              <div className="flex justify-between items-center"><span className="text-muted-foreground">Tip</span><input type="number" value={tipAmount} onChange={e => setTipAmount(e.target.value)} placeholder="0" className="w-20 px-2 py-1 text-right text-sm bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary" /></div>
               <div className="flex justify-between font-bold text-lg pt-1 border-t border-border"><span>Total</span><span className="text-primary">{formatCurrency(cartTotal)}</span></div>
             </div>
 
@@ -563,6 +577,101 @@ export default function NiceAndNeat() {
             </button>
           </div>
         </div>
+      </div>
+    );
+  };
+
+  // ============================================
+  // RENDER: WALK-IN QUEUE
+  // ============================================
+  const renderQueue = () => {
+    if (!queueData) return <div className="flex items-center justify-center h-64"><RefreshCw className="w-8 h-8 animate-spin text-primary" /></div>;
+    const { queue = [], stats = {} } = queueData;
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <h2 className="text-xl font-bold">Walk-In Queue</h2>
+            <p className="text-xs text-muted-foreground">Manage walk-in customers — track wait times & no-shows</p>
+          </div>
+          <button onClick={() => setShowAddQueue(true)} className="flex items-center gap-2 px-3 py-1.5 btn-primary rounded-lg text-xs"><Plus className="w-3.5 h-3.5" /> Add to Queue</button>
+        </div>
+
+        {/* Queue Stats */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="card-stat rounded-xl p-3"><p className="text-label">Waiting Now</p><p className="text-2xl font-bold text-primary">{stats.waiting || 0}</p></div>
+          <div className="card-stat rounded-xl p-3"><p className="text-label">Seated Today</p><p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{stats.seatedToday || 0}</p></div>
+          <div className="card-stat rounded-xl p-3"><p className="text-label">No-Shows Today</p><p className="text-2xl font-bold text-red-600 dark:text-red-400">{stats.noShowToday || 0}</p></div>
+          <div className="card-stat rounded-xl p-3"><p className="text-label">Avg Wait</p><p className="text-2xl font-bold">{stats.avgWaitMinutes || 0}<span className="text-sm text-muted-foreground"> min</span></p></div>
+          <div className="card-stat rounded-xl p-3"><p className="text-label">No-Show Rate</p><p className={`text-2xl font-bold ${(stats.noShowRate || 0) > 20 ? 'text-red-600 dark:text-red-400' : (stats.noShowRate || 0) > 10 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>{stats.noShowRate || 0}%</p></div>
+        </div>
+
+        {(stats.noShowRate || 0) > 20 && (
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-3 flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0" />
+            <p className="text-sm text-red-800 dark:text-red-300">High no-show rate ({stats.noShowRate}%). Consider implementing appointment reminders or a no-show policy.</p>
+          </div>
+        )}
+
+        {/* Queue List */}
+        {queue.length === 0 ? (
+          <div className="text-center py-12 text-muted-foreground">
+            <Users className="w-12 h-12 mx-auto mb-3 opacity-50" />
+            <p>Queue is empty</p>
+            <p className="text-xs mt-1">Add walk-in customers to start tracking</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {queue.map((entry: any, i: number) => {
+              const waitMin = Math.round((Date.now() - new Date(entry.checkInTime).getTime()) / 60000);
+              const barber = barbers.find(b => b.id === entry.preferredBarberId);
+              return (
+                <div key={entry.id} className={`card-interactive rounded-xl p-4 ${i === 0 ? 'border-primary border-2' : ''}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white ${i === 0 ? 'bg-gradient-to-br from-emerald-500 to-teal-600 animate-pulse' : 'bg-gradient-to-br from-amber-500 to-orange-600'}`}>
+                        {entry.position}
+                      </div>
+                      <div>
+                        <p className="font-semibold text-sm">{entry.clientName}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Waiting {waitMin} min
+                          {entry.partySize > 1 && ` • Party of ${entry.partySize}`}
+                          {barber && ` • Wants ${barber.name}`}
+                          {entry.notes && ` • ${entry.notes}`}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button onClick={async () => { await fetch('/api/queue', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: entry.id, action: 'seat' }) }); fetchQueue(); showToast(`${entry.clientName} seated (waited ${waitMin} min)`, 'success'); }} className="px-3 py-1.5 text-xs bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded-lg font-medium hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition">Seat</button>
+                      <button onClick={async () => { await fetch('/api/queue', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: entry.id, action: 'no_show' }) }); fetchQueue(); showToast(`${entry.clientName} marked as no-show`, 'warning'); }} className="px-3 py-1.5 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg font-medium hover:bg-red-200 dark:hover:bg-red-900/50 transition">No-Show</button>
+                      <button onClick={async () => { await fetch('/api/queue', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: entry.id, action: 'cancel' }) }); fetchQueue(); }} className="px-2 py-1.5 text-xs bg-muted text-muted-foreground rounded-lg hover:bg-muted/70 transition"><X className="w-3.5 h-3.5" /></button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Add to Queue Modal */}
+        {showAddQueue && (
+          <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setShowAddQueue(false)}>
+            <div className="bg-card rounded-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-4"><h3 className="font-bold text-lg">Add to Queue</h3><button onClick={() => setShowAddQueue(false)} className="p-1 hover:bg-muted rounded"><X className="w-5 h-5" /></button></div>
+              <div className="space-y-3">
+                <div><label className="text-xs text-muted-foreground">Customer Name</label><input type="text" value={newQueueEntry.clientName} onChange={e => setNewQueueEntry(q => ({ ...q, clientName: e.target.value }))} placeholder="e.g. John or Walk-in #3" className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" /></div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div><label className="text-xs text-muted-foreground">Phone (optional)</label><input type="tel" value={newQueueEntry.clientPhone} onChange={e => setNewQueueEntry(q => ({ ...q, clientPhone: e.target.value }))} placeholder="254712345678" className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" /></div>
+                  <div><label className="text-xs text-muted-foreground">Party Size</label><input type="number" value={newQueueEntry.partySize} onChange={e => setNewQueueEntry(q => ({ ...q, partySize: e.target.value }))} min="1" className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" /></div>
+                </div>
+                <div><label className="text-xs text-muted-foreground">Preferred Barber (optional)</label><select value={newQueueEntry.preferredBarberId} onChange={e => setNewQueueEntry(q => ({ ...q, preferredBarberId: e.target.value }))} className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"><option value="">Any available</option>{barbers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+                <div><label className="text-xs text-muted-foreground">Notes (preferences)</label><input type="text" value={newQueueEntry.notes} onChange={e => setNewQueueEntry(q => ({ ...q, notes: e.target.value }))} placeholder="e.g. Wants skin fade" className="w-full px-3 py-2 mt-1 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary" /></div>
+                <button onClick={async () => { if (!newQueueEntry.clientName) { showToast('Name required', 'error'); return; } try { const r = await fetch('/api/queue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shopId, ...newQueueEntry, partySize: parseInt(newQueueEntry.partySize) }) }); if (!r.ok) throw new Error((await r.json()).error); setShowAddQueue(false); setNewQueueEntry({ clientName: '', clientPhone: '', partySize: '1', preferredBarberId: '', notes: '' }); fetchQueue(); showToast('Added to queue!', 'success'); } catch (e: any) { showToast(e.message, 'error'); } }} className="w-full py-2.5 btn-primary rounded-lg text-sm">Add to Queue</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -1015,13 +1124,14 @@ export default function NiceAndNeat() {
         <header className="sticky top-0 z-30 bg-background/80 backdrop-blur-md border-b border-border px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button onClick={() => setSidebarOpen(true)} className="md:hidden p-1 hover:bg-muted rounded"><Menu className="w-5 h-5" /></button>
-            <h2 className="font-semibold text-lg capitalize">{currentView === 'new-sale' ? 'New Sale' : currentView}</h2>
+            <h2 className="font-semibold text-lg capitalize">{currentView === 'new-sale' ? 'New Sale' : currentView === 'queue' ? 'Walk-In Queue' : currentView}</h2>
           </div>
           <button onClick={() => setIsDark(d => !d)} className="p-2 hover:bg-muted rounded-lg text-sm">{isDark ? '☀️' : '🌙'}</button>
         </header>
         <div className="p-4 md:p-6 max-w-7xl mx-auto">
           {currentView === 'dashboard' && renderDashboard()}
           {currentView === 'new-sale' && renderNewSale()}
+          {currentView === 'queue' && renderQueue()}
           {currentView === 'clients' && renderClients()}
           {currentView === 'expenses' && renderExpenses()}
           {currentView === 'reports' && renderReports()}

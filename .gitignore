@@ -59,3 +59,7 @@ research*.json
 pos_research*.json
 db/
 MARKET_RESEARCH_ANALYSIS.md*.json
+br_*.json
+barber_*.json
+deep_research_*.json
+wave3_*.json

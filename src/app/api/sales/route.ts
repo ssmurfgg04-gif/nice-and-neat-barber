@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { shopId, items, clientId, barberId, paymentMethod, mpesaRef, discountAmount, notes } = body;
+    const { shopId, items, clientId, barberId, paymentMethod, mpesaRef, discountAmount, tipAmount, notes } = body;
 
     if (!shopId || !items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json({ error: 'shopId and items array required' }, { status: 400 });
@@ -60,7 +60,8 @@ export async function POST(request: NextRequest) {
       subtotal += item.price * item.quantity;
     }
     const discount = parseFloat(discountAmount) || 0;
-    const totalAmount = subtotal - discount;
+    const tip = parseFloat(tipAmount) || 0;
+    const totalAmount = subtotal - discount + tip;
 
     // Generate invoice number
     const today = new Date();
@@ -73,7 +74,7 @@ export async function POST(request: NextRequest) {
       data: {
         shopId, clientId: clientId || null, barberId: barberId || null,
         invoiceNumber, subtotal, taxAmount: 0, discountAmount: discount,
-        totalAmount, paymentMethod: paymentMethod || 'cash',
+        tipAmount: tip, totalAmount, paymentMethod: paymentMethod || 'cash',
         mpesaRef: mpesaRef || null, notes: notes || null,
         status: 'completed', saleDate: new Date(),
         items: { create: items.map((item: any) => ({ itemType: item.itemType, itemId: item.itemId, itemName: item.itemName, price: item.price, quantity: item.quantity, lineTotal: item.price * item.quantity })) },
